@@ -18,7 +18,6 @@ from enum import Enum
 import json
 import logging
 import os
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import aiofiles
@@ -30,6 +29,7 @@ from .const import (
     DEFAULT_SOLCAST_PERCENTILE,
     DEFAULT_SOLCAST_UPDATE_HOURS,
     TIMEOUT,
+    TIMEZONE,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ else:
 class SolcastAPI:
     """Class to handle Solcast API calls and data processing for the Time of Use integration."""
 
-    def __init__(self, *, api_key: str, resource_id: str, timezone: str) -> None:
+    def __init__(self) -> None:
         """Initialize key variables for API calls and data calculations.
 
         Args:
@@ -54,10 +54,10 @@ class SolcastAPI:
 
         """
         # General info
-        self._api_key = api_key
-        self._resource_id = resource_id
+        self._api_key: str | None = None
+        self._resource_id: str | None = None
         self.forecast: dict[str, tuple[float, bool]] = {}
-        self.timezone = timezone
+        self.timezone: str = TIMEZONE
         self.status = SolcastStatus.UNKNOWN
         self.data_updated: datetime | None = None
         # forecast is a dictionary of hourly estimates with the date/hour as the key and the value as a tuple of float and bool.
@@ -69,34 +69,54 @@ class SolcastAPI:
         module_dir = os.path.dirname(os.path.abspath(__file__))
         self.raw_filepath = os.path.join(module_dir, "solcast_raw.data")
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return this sensor data as a dictionary.
+    @property
+    def api_key(self) -> str | None:
+        """Return the Solcast API key."""
+        return self._api_key
 
-        This method provides pv forecast statistics and sun sensor data for the current hour so the TOU entity can
-        compute estimated power from this historical data.
+    @api_key.setter
+    def api_key(self, value: str) -> None:
+        """Set the Solcast API key."""
+        self._api_key = value
 
-        Returns:
-            dict[str, Any]: A dictionary containing the sensor data.
+    @property
+    def resource_id(self) -> str | None:
+        """Return the Solcast resource ID."""
+        return self._resource_id
 
-        """
-        logger.debug("Returning solcast sensor data as dict")
+    @resource_id.setter
+    def resource_id(self, value: str) -> None:
+        """Set the Solcast resource ID."""
+        self._resource_id = value
 
-        # Get the current hour
-        now = datetime.now(ZoneInfo(self.timezone))
-        current_hour = f"{now.date()}-{now.hour}"
-        return {
-            # PV estimate for the current hour
-            "pv_estimated_power": self._get_current_hour_pv_estimate(current_hour),
-            # Sun info for the current hour: full, partial, or dark
-            "sun": self._get_current_hour_sun_estimate(current_hour),
-        }
+    # def to_dict(self) -> dict[str, Any]:
+    #     """Return this sensor data as a dictionary.
 
-    def _get_current_hour_pv_estimate(self, current_hour: str) -> float:
+    #     This method provides pv forecast statistics and sun sensor data for the current hour so the TOU entity can
+    #     compute estimated power from this historical data.
+
+    #     Returns:
+    #         dict[str, Any]: A dictionary containing the sensor data.
+
+    #     """
+    #     logger.debug("Returning solcast sensor data as dict")
+
+    #     # Get the current hour
+    #     now = datetime.now(ZoneInfo(self.timezone))
+    #     current_hour = f"{now.date()}-{now.hour}"
+    #     return {
+    #         # PV estimate for the current hour
+    #         "pv_estimated_power": self.get_current_hour_pv_estimate(current_hour),
+    #         # Sun info for the current hour: full, partial, or dark
+    #         "sun": self.get_current_hour_sun_estimate(current_hour),
+    #     }
+
+    def get_current_hour_pv_estimate(self, current_hour: str) -> float:
         """Get the estimate for the current hour PV."""
         # Return the current hour estimate
         return self.forecast.get(current_hour, (0.0, False))[0]
 
-    def _get_current_hour_sun_estimate(self, current_hour: str) -> str:
+    def get_current_hour_sun_estimate(self, current_hour: str) -> str:
         """Get the sun status for the current hour."""
         # Return the current hour sun status
         return "full" if self.forecast.get(current_hour, (0.0, False))[1] else "partial"

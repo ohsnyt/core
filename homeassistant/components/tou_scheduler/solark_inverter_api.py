@@ -13,7 +13,6 @@ from aiohttp import ClientSession
 from requests.exceptions import HTTPError, RequestException, Timeout
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
 
 from .const import (
     API_URL,
@@ -46,7 +45,7 @@ class InverterAPI:
     It requires a username and password to authenticate to the cloud. This will return false if the authentication fails.
     """
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self) -> None:
         """Sol-Ark data cloud object."""
 
         logger.debug("Instantiating a Sol-Ark data cloud object")
@@ -62,9 +61,10 @@ class InverterAPI:
             # Other urls will be added later after the plant is selected
         }
         self.user_id: str | None = None
+        self._username: str | None = None
+        self._password: str | None = None
 
         # Home Assistant stuff needed to set up listener after configuration is done
-        self.hass = hass
         self.config_entry: ConfigEntry | None = None
         self.config_entry_id: str | None = None
 
@@ -114,65 +114,65 @@ class InverterAPI:
         self.realtime_load_power = 0.0
         self.realtime_pv_power = 0.0
 
-        self._username: str | None = None
-        self._password: str | None = None
         self.batt_soc: float = 0.0
         self._batt_wh_max_est: float = 0.0
+
+    @property
+    def username(self) -> str | None:
+        """Return the username."""
+        return self._username
+
+    @username.setter
+    def username(self, value: str) -> None:
+        """Set the username."""
+        self._username = value
+
+    @property
+    def password(self) -> str | None:
+        """Return the password."""
+        return self._password
+
+    @password.setter
+    def password(self, value: str) -> None:
+        """Set the password."""
+        self._password = value
 
     def __str__(self) -> str:
         """Return a string representation of the cloud."""
         return f"Cloud(url={CLOUD_URL}, selected plant={self.plant_id}, updated={self.data_updated})"
 
-    def get_username(self) -> str | None:
-        """Return the username."""
-        return self._username
+    # def to_dict(self) -> dict[str, Any]:
+    #     """Return this cloud data as a dictionary.
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return this cloud data as a dictionary.
+    #     This method collects various statistics and information about the Sol-Ark cloud,
+    #     including battery status, power statistics, plant information, and inverter details.
+    #     It also includes estimated solar production and load for the current hour.
 
-        This method collects various statistics and information about the Sol-Ark cloud,
-        including battery status, power statistics, plant information, and inverter details.
-        It also includes estimated solar production and load for the current hour.
+    #     Returns:
+    #         dict[str, Any]: A dictionary containing the cloud data.
 
-        Returns:
-            dict[str, Any]: A dictionary containing the cloud data.
+    #     """
+    #     logger.debug("Returning cloud data as dict")
 
-        """
-        logger.debug("Returning cloud data as dict")
-
-        return {
-            "data_updated": self.data_updated,
-            "cloud_name": self.cloud_name,
-            "batt_wh_usable": self.batt_wh_usable,
-            "batt_soc": self.batt_soc,
-            "power_battery": self.realtime_battery_power,
-            "power_grid": self.realtime_grid_power,
-            "power_load": self.realtime_load_power,
-            "power_pv": self.realtime_pv_power,
-            # Plant info
-            "plant_id": self.plant_id,
-            "plant_created": self.plant_created,
-            "plant_name": self.plant_name,
-            "plant_status": self.plant_status,
-            # Inverter info
-            "inverter_model": self.inverter_model,
-            "inverter_status": self.inverter_status,
-            "inverter_serial_number": self.inverter_serial_number,
-            # PV estimate for the current hour
-            "pv_estimated_power": self._get_current_hour_pv_estimate(),
-            # Sun info
-            "sun": self._get_current_hour_full_sun(),  # Was the sun full, partial or dark?
-        }
-
-    def _get_current_hour_pv_estimate(self) -> float:
-        """Get the estimate for the current hour PV."""
-        # Placeholder implementation
-        return 0.0
-
-    def _get_current_hour_full_sun(self) -> str:
-        """Get the sun status for the current hour."""
-        # Placeholder implementation
-        return "partial"
+    #     return {
+    #         "data_updated": self.data_updated,
+    #         "cloud_name": self.cloud_name,
+    #         "batt_wh_usable": self.batt_wh_usable,
+    #         "batt_soc": self.batt_soc,
+    #         "power_battery": self.realtime_battery_power,
+    #         "power_grid": self.realtime_grid_power,
+    #         "power_load": self.realtime_load_power,
+    #         "power_pv": self.realtime_pv_power,
+    #         # Plant info
+    #         "plant_id": self.plant_id,
+    #         "plant_created": self.plant_created,
+    #         "plant_name": self.plant_name,
+    #         "plant_status": self.plant_status,
+    #         # Inverter info
+    #         "inverter_model": self.inverter_model,
+    #         "inverter_status": self.inverter_status,
+    #         "inverter_serial_number": self.inverter_serial_number,
+    #     }
 
     def _build_api_endpoints(self) -> None:
         """Build endpoints needed to get sensor and settings data from the cloud.
@@ -198,15 +198,12 @@ class InverterAPI:
             CLOUD_URL + f"/api/v1/common/setting/{self.inverter_serial_number}/set"
         )
 
-    async def authenticate(self, username: str, password: str) -> bool:
+    async def authenticate(self) -> bool:
         """Authenticate to the Sol-Ark cloud. Creates and holds a session."""
         # If we don't have a username or password, we can't authenticate
-        if not (username and password):
+        if not (self.username and self.password):
             logger.error("Cannot authenticate: No username or password")
             return False
-
-        self._username = username
-        self._password = password
 
         # If we don't have a refresh token, we need to prepare to create a session and log in
         logger.debug("Authenticating to the Sol-Ark cloud")
@@ -221,8 +218,8 @@ class InverterAPI:
             self._session = ClientSession(headers=headers)
             # Prepare the payload for the login
             payload = {
-                "username": username,
-                "password": password,
+                "username": self.username,
+                "password": self.password,
                 "grant_type": "password",
                 "client_id": "csp-web",
             }
@@ -295,7 +292,6 @@ class InverterAPI:
             self.efficiency = infos[0].get("efficiency", DEFAULT_INVERTER_EFFICIENCY)
             self.plant_address = infos[0].get("address", None)
             self.plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
-            # CAN I GET THE TIMEZONE HERE?
         return True
 
     async def get_inverter_sn(self) -> bool:
@@ -328,13 +324,13 @@ class InverterAPI:
         logger.debug("Successfully retrieved the inverter serial number")
         return True
 
-    async def update_sensors(self) -> dict[str, Any]:
+    async def refresh_data(self) -> None:
         """Update statistics on this plant's various components and return them as a dict."""
         # At startup, make sure we have the inverter serial number (and built the api endpoints)
         if self.inverter_serial_number is None:
             result = await self.get_inverter_sn()
             if result is False:
-                return {}
+                return
 
         # Get the realtime stats for this plant, raising an exception if there is a problem
         await self._read_settings()
@@ -342,8 +338,8 @@ class InverterAPI:
 
         # Report that the cloud status was good
         self.cloud_status = Cloud_Status.ONLINE
-        logger.info("Dictionary of sensor data returned")
-        return self.to_dict()
+        # logger.info("Dictionary of sensor data returned")
+        # return self.to_dict()
 
     async def _update_flow(self) -> None:
         """Get statistics on this plant's battery."""
@@ -449,9 +445,7 @@ class InverterAPI:
             if not self._username or not self._password:
                 logger.error("Cannot authenticate: No username or password")
                 return None
-            if not await self.authenticate(
-                username=self._username, password=self._password
-            ):
+            if not await self.authenticate():
                 # If we can't authenticate, we can't send the request
                 return None
 
