@@ -62,7 +62,7 @@ class SolcastAPI:
         # forecast is a dictionary of hourly estimates with the date/hour as the key and the value as a tuple of float and bool.
         self.energy_production_tomorrow = 0.0
         self.percentile = DEFAULT_SOLCAST_PERCENTILE
-        self.update_hours = DEFAULT_SOLCAST_UPDATE_HOURS
+        self._update_hours = DEFAULT_SOLCAST_UPDATE_HOURS
 
         # Initialize the path to the data files
         module_dir = os.path.dirname(os.path.abspath(__file__))
@@ -87,6 +87,16 @@ class SolcastAPI:
     def resource_id(self, value: str) -> None:
         """Set the Solcast resource ID."""
         self._resource_id = value
+
+    @property
+    def update_hours(self) -> list[int]:
+        """Return the hours to update Solcast data."""
+        return self._update_hours
+
+    @update_hours.setter
+    def update_hours(self, value: list[int]) -> None:
+        """Set the hours to update Solcast data."""
+        self._update_hours = value
 
     # def to_dict(self) -> dict[str, Any]:
     #     """Return this sensor data as a dictionary.
@@ -138,9 +148,9 @@ class SolcastAPI:
             self.status = SolcastStatus.NOT_CONFIGURED
             return
 
-        # If we have hourly_forecast data and the hour of self.data_updated is in the self.update_hours list AND self.data_updated is today, return.
+        # If we have hourly_forecast data and the hour of self.data_updated is in the self._update_hours list AND self.data_updated is today, return.
         if self.data_updated and (
-            self.data_updated.hour in self.update_hours
+            self.data_updated.hour in self._update_hours
             and self.data_updated.date() == datetime.now(ZoneInfo(self.timezone)).date()
         ):
             return
@@ -154,7 +164,7 @@ class SolcastAPI:
             not os.path.exists(self.raw_filepath)
             or self.data_updated
             and self.data_updated.date() < datetime.now(ZoneInfo(self.timezone)).date()
-            or datetime.now(ZoneInfo(self.timezone)).hour in self.update_hours
+            or datetime.now(ZoneInfo(self.timezone)).hour in self._update_hours
             and self.data_updated
             and self.data_updated.hour != datetime.now(ZoneInfo(self.timezone)).hour
             or self.status == SolcastStatus.CANNOT_READ

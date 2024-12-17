@@ -57,15 +57,15 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         translation_key="sun",
         has_entity_name=True,
         name="sun",
-        icon="mdi:flash",
+        icon="mdi:sun-thermometer",
         # This is a string, "full", "partial", or "dark"
     ),
     "power_pv": OhSnytSensorEntityDescription(
         key="power_pv",
         translation_key="power_pv",
         has_entity_name=True,
-        name="PV power",
-        icon="mdi:flash",
+        name="Power from PV",
+        icon="mdi:solar-power",
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
@@ -77,18 +77,19 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         translation_key="batt_soc",
         has_entity_name=True,
         name="Battery State of Charge",
-        icon="mdi:flash",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        suggested_unit_of_measurement=UnitOfPower.WATT,
+        icon="mdi:percent-outline",
+        native_unit_of_measurement="%",
+        suggested_unit_of_measurement="%",
         suggested_display_precision=0,
-        device_class=SensorDeviceClass.POWER,
+        device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     "batt_wh_usable": OhSnytSensorEntityDescription(
         key="batt_wh_usable",
         translation_key="batt_wh_usable",
         has_entity_name=True,
-        name="batt_wh_usable",
+        name="Usable battery energy",
+        icon="mdi:battery",
         native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         suggested_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         suggested_display_precision=0,
@@ -99,7 +100,8 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         key="power_battery",
         translation_key="power_battery",
         has_entity_name=True,
-        name="power_battery",
+        name="Power from (to) battery",
+        icon="mdi:battery",
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
@@ -110,7 +112,8 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         key="power_grid",
         translation_key="power_grid",
         has_entity_name=True,
-        name="power_grid",
+        name="Power from (to) grid",
+        icon="mdi:transmission-tower-import",
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
@@ -121,7 +124,8 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         key="power_load",
         translation_key="power_load",
         has_entity_name=True,
-        name="power_load",
+        name="Power to load",
+        icon="mdi:power-socket-us",
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_unit_of_measurement=UnitOfPower.WATT,
         suggested_display_precision=0,
@@ -188,7 +192,7 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
             entity_description.icon if entity_description.icon else "mdi:flash"
         )
         # Set the name and description
-        self._attr_name = f"ToU {entity_description.name}"
+        self._attr_name = f"{entity_description.name}"
         self.entity_description = entity_description
         # And then set the key and sensor unique_id
         self._key = entity_description.key

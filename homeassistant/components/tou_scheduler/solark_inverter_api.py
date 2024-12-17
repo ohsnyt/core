@@ -19,6 +19,7 @@ from .const import (
     CLOUD_UPDATE_INTERVAL,
     CLOUD_URL,
     DEBUGGING,
+    DEFAULT_BATTERY_SHUTDOWN,
     DEFAULT_GRID_BOOST_END,
     DEFAULT_GRID_BOOST_MIDNIGHT_SOC,
     DEFAULT_GRID_BOOST_ON,
@@ -50,9 +51,9 @@ class InverterAPI:
 
         logger.debug("Instantiating a Sol-Ark data cloud object")
         # General cloud info
-        self.cloud_name = "Solark Data Cloud"
+        self.cloud_name = "MySolark Data"
         self.cloud_status = Cloud_Status.UNKNOWN
-        self.data_updated: datetime | None = None
+        self.data_updated: str = ""
         self.urls = {
             "auth": CLOUD_URL + "/oauth/token",
             "plant_list": API_URL + "plants?page=1&limit=10&name=&status=",
@@ -99,13 +100,12 @@ class InverterAPI:
         self.grid_boost_on: str = DEFAULT_GRID_BOOST_ON
 
         # Here is the battery info
-        self.batt_wh_usable: int | None = None  # Current battery charge in Wh
-        self.grid_boost_wh_min: int | None = (
-            None  # Minimum battery charge in Wh allowed during grid boost
+        self.batt_wh_usable: int = 0  # Current battery charge in Wh
+        self.grid_boost_wh_min: int = (
+            0  # Minimum battery charge in Wh during grid boost time
         )
-        self.batt_wh_per_percent: float | None = (
-            None  # Battery capacity in Wh per 1% SoC
-        )
+        self.batt_wh_per_percent: float = 0.0  # Battery capacity in Wh per percent
+        self.batt_shutdown: int = DEFAULT_BATTERY_SHUTDOWN  # Battery shutdown SoC
 
         # Realtime power in and out. Shown in kW
         self.realtime_battery_soc = 0.0
@@ -140,39 +140,6 @@ class InverterAPI:
     def __str__(self) -> str:
         """Return a string representation of the cloud."""
         return f"Cloud(url={CLOUD_URL}, selected plant={self.plant_id}, updated={self.data_updated})"
-
-    # def to_dict(self) -> dict[str, Any]:
-    #     """Return this cloud data as a dictionary.
-
-    #     This method collects various statistics and information about the Sol-Ark cloud,
-    #     including battery status, power statistics, plant information, and inverter details.
-    #     It also includes estimated solar production and load for the current hour.
-
-    #     Returns:
-    #         dict[str, Any]: A dictionary containing the cloud data.
-
-    #     """
-    #     logger.debug("Returning cloud data as dict")
-
-    #     return {
-    #         "data_updated": self.data_updated,
-    #         "cloud_name": self.cloud_name,
-    #         "batt_wh_usable": self.batt_wh_usable,
-    #         "batt_soc": self.batt_soc,
-    #         "power_battery": self.realtime_battery_power,
-    #         "power_grid": self.realtime_grid_power,
-    #         "power_load": self.realtime_load_power,
-    #         "power_pv": self.realtime_pv_power,
-    #         # Plant info
-    #         "plant_id": self.plant_id,
-    #         "plant_created": self.plant_created,
-    #         "plant_name": self.plant_name,
-    #         "plant_status": self.plant_status,
-    #         # Inverter info
-    #         "inverter_model": self.inverter_model,
-    #         "inverter_status": self.inverter_status,
-    #         "inverter_serial_number": self.inverter_serial_number,
-    #     }
 
     def _build_api_endpoints(self) -> None:
         """Build endpoints needed to get sensor and settings data from the cloud.
@@ -359,8 +326,16 @@ class InverterAPI:
         self.realtime_battery_soc = self.safe_get(data, "soc")
         self.realtime_battery_power = self.safe_get(data, "battPower")
         self.realtime_load_power = self.safe_get(data, "loadOrEpsPower")
-        self.realtime_battery_power = self.safe_get(data, "gridOrMeterPower")
+        self.realtime_grid_power = self.safe_get(data, "gridOrMeterPower")
         self.realtime_pv_power = self.safe_get(data, "pvPower")
+
+        # Calculate the current usable battery charge in Wh
+        self.batt_wh_usable = int(
+            self.batt_wh_per_percent * (self.realtime_battery_soc - self.batt_shutdown)
+        )
+        logger.debug("Current battery charge: %s wH", self.batt_wh_usable)
+
+        self.data_updated = datetime.now().strftime("%a %I:%M %p")
 
     async def _read_settings(self) -> dict[str, Any]:
         """Read the inverter settings and set self values."""
@@ -380,14 +355,9 @@ class InverterAPI:
             self.grid_boost_end = data.get("sellTime2", DEFAULT_GRID_BOOST_END)
             self.grid_boost_on = data.get("time1on", OFF)
             batt_capacity_ah = self.safe_get(data, "batteryCap")
-            batt_shutdown = self.safe_get(data, "batteryShutdownCap")
+            self.batt_shutdown = int(self.safe_get(data, "batteryShutdownCap"))
             batt_float_voltage = self.safe_get(data, "floatVolt")
             self.batt_wh_per_percent = batt_capacity_ah * batt_float_voltage / 100
-
-            self.batt_wh_usable = int(
-                self.batt_wh_per_percent * (self.realtime_battery_soc - batt_shutdown)
-            )
-            logger.debug("Current battery charge: %s wH", self.batt_wh_usable)
 
             self.grid_boost_wh_min = int(
                 self.batt_wh_per_percent * self.grid_boost_starting_soc

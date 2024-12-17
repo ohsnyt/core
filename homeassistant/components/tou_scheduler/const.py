@@ -62,6 +62,7 @@ TIMEZONE = "timezone"
 GRID_BOOST_SOC_LOW = (
     1  # Min battery level before forcing grid charging any time of the day
 )
+DEFAULT_BATTERY_SHUTDOWN = 1  # 1% is the lowest we allow the battery to discharge
 DEFAULT_GRID_BOOST_STARTING_SOC = (
     25  # Min battery level at the end of the off-peak charging time
 )

@@ -30,15 +30,12 @@ class TOUSchedulerEntity(CoordinatorEntity):
         super().__init__(coordinator)
 
         # Set the icon
-        self._attr_icon = "mdi:clock-time-four-outline"
+        self._attr_icon = "mdi:toggle-switch"
         # Set the unique_id of the sensor
-        plant_id = (
-            f"{entry_id}_{coordinator.data.get('plant_id', 'Plant ID not available')}"
+        self._attr_unique_id = (
+            f"{coordinator.data.get('plant_id', '??????')}_Inverter_ToU_settings"
         )
-        self._attr_unique_id = f"{plant_id}_Inverter_ToU_settings"
-        self._attr_name = (
-            f"{coordinator.data.get('inverter_sn', 'My Inverter')} ToU settings"
-        )
+        self._attr_name = f"{coordinator.data.get('plant_name', 'My plant')} ToU system"
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": self.name,
@@ -80,14 +77,11 @@ class BatteryEntity(CoordinatorEntity):
         super().__init__(coordinator)
 
         # Set the icon
-        self._attr_icon = "mdi:clock-time-four-outline"
+        self._attr_icon = "mdi:clock-time-eleven-outline"
         # Set the unique_id of the sensor
-        plant_id = (
-            f"{entry_id}_{coordinator.data.get('plant_id', 'Plant ID not available')}"
-        )
-        self._attr_unique_id = f"{plant_id}_Battery"
+        self._attr_unique_id = f"{coordinator.data.get('plant_id', '??????')}_Battery"
         self._attr_name = (
-            f"{coordinator.data.get('plant_name', 'Sol-Ark Plant')} Battery "
+            f"{coordinator.data.get('plant_name', 'Sol-Ark Plant')} battery "
         )
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
@@ -103,7 +97,7 @@ class BatteryEntity(CoordinatorEntity):
     @property
     def state(self) -> str:
         """Return the state of the battery in hours."""
-        return f"{round(self.coordinator.data.get('battery_minutes', 0)/60, 1)} hours of battery remaining"
+        return f"{round(self.coordinator.data.get('battery_minutes', 0)/60, 1)} hours remaining"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -128,8 +122,8 @@ class PlantEntity(CoordinatorEntity):
         # Set the icon
         self._attr_icon = "mdi:solar-power"
 
-        self._attr_unique_id = f"{entry_id}_{self.coordinator.data.get('plant_id', "Plant ID not available")}"
-        self._attr_name = self.coordinator.data.get("plant_name", "Sol-Ark Plant")
+        self._attr_unique_id = f"{coordinator.data.get('plant_id', '??????')}"
+        self._attr_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")} plant"
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": self.name,
@@ -177,8 +171,10 @@ class InverterEntity(CoordinatorEntity):
         self._attr_icon = "mdi:application-cog"
 
         # Set the unique_id and name of the sensor
-        self._attr_unique_id = f"{entry_id}_{self.coordinator.data.get('inverter_serial_number', 'Missing SN')}"
-        self._attr_name = f"{self.coordinator.data.get('plant_name', None)} Inverter"
+        self._attr_unique_id = (
+            f"{self.coordinator.data.get('inverter_serial_number', 'Missing SN')}"
+        )
+        self._attr_name = f"{self.coordinator.data.get('plant_name', None)} inverter"
         # Set the extra device info
         self._additional_device_info = {
             "model": self.coordinator.data.get("inverter_model", None),
@@ -225,13 +221,13 @@ class ShadingEntity(CoordinatorEntity):
         super().__init__(coordinator)
         self._name = "Shading"
         self._attr_native_unit_of_measurement = "%"
-        self._attr_icon = "mdi:cloud-sun"
+        self._attr_icon = "mdi:weather-sunny"
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._hours: dict[int, float] = {}
 
         # Set the unique_id and name of the sensor
-        self._attr_unique_id = f"{entry_id}_Shading"
-        self._attr_name = "Shading expected"
+        self._attr_unique_id = f"{coordinator.data.get('plant_id', '??????')}_Shading"
+        self._attr_name = "Daily average shading"
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": self._name,
@@ -250,10 +246,13 @@ class ShadingEntity(CoordinatorEntity):
     def state(self) -> str:
         """Return the average shading for the day."""
         self._hours = self.coordinator.data.get("shading", {})
-        if self._hours:
-            average = sum(map(float, self._hours.values())) / len(self._hours)
-            return f"Average shading: {round(average * 100)}%"
-        return "No shading info available"
+        shade = ""
+        for hour, value in self._hours.items():
+            if value != 0:
+                shade += f"{round(float(value) * 100)}% at {hour % 12 or 12} {'am' if hour < 12 else 'pm'}, "
+        if sum(map(float, self._hours.values())) > 0:
+            return shade[:-2]  # remove the trailing comma and space
+        return "No shading found"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -264,6 +263,18 @@ class ShadingEntity(CoordinatorEntity):
     def unique_id(self) -> str | None:
         """Return a unique ID."""
         return self._attr_unique_id
+
+    @property
+    def icon(self) -> str:
+        """Return the icon based on the current state of the sensor sun in this integration."""
+        state = self.hass.states.get("sensor.tou_sun")
+        state_value = state.state if state else "unknown"
+        state_icon_map = {
+            "full": "mdi:sun-thermometer",
+            "partial": "mdi:weather-partly-cloudy",
+            "dark": "mdi:weather-night",
+        }
+        return state_icon_map.get(state_value, "mdi:progress-question")
 
 
 class CloudEntity(CoordinatorEntity):
@@ -278,8 +289,9 @@ class CloudEntity(CoordinatorEntity):
         # Set the icon
         self._attr_icon = "mdi:cloud"
         # Set the unique_id of the sensor
-        plant_id = self.coordinator.data.get("plant_id", "Missing Plant ID")
-        self._attr_unique_id = f"{plant_id}_Solark_Cloud"
+        self._attr_unique_id = (
+            f"{coordinator.data.get('plant_id', '??????')}_Solark_Cloud"
+        )
         self._attr_name = self.coordinator.data.get("cloud_name", "Sol-Ark Cloud")
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
@@ -290,15 +302,6 @@ class CloudEntity(CoordinatorEntity):
     @property
     def attributes(self) -> dict[str, Any]:
         """Return the created date and bearer_token expiry date for the cloud sensor."""
-        # return {
-        #     "created": self.coordinator.data["plant_created"]
-        #     .replace(tzinfo=UTC)
-        #     .astimezone(ZoneInfo("America/Chicago"))
-        #     .strftime("%I:%M %p"),
-        #     "bearer_token_expires_on": self.coordinator.data.get(
-        #         "bearer_token_expires_on", "Unknown"
-        #     ),
-        # }
         return {
             "created": self.coordinator.data["plant_created"],
             "bearer_token_expires_on": self.coordinator.data.get(
@@ -316,7 +319,7 @@ class CloudEntity(CoordinatorEntity):
         """Return the state of the sensor."""
         data_updated = self.coordinator.data.get("data_updated")
         if data_updated:
-            return "Updated at " + data_updated
+            return "Retrieved " + data_updated
         return "Update time not available"
 
     @property
