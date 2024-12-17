@@ -114,7 +114,7 @@ class InverterAPI:
         self.realtime_load_power = 0.0
         self.realtime_pv_power = 0.0
 
-        self.batt_soc: float = 0.0
+        # self.batt_soc: float = 0.0
         self._batt_wh_max_est: float = 0.0
 
     @property
@@ -197,6 +197,16 @@ class InverterAPI:
         self.urls["write_settings"] = (
             CLOUD_URL + f"/api/v1/common/setting/{self.inverter_serial_number}/set"
         )
+
+    async def test_authenticate(self) -> str | None:
+        """Authenticate to the Sol-Ark cloud for config_flow. Return list of plants or None."""
+        await self.authenticate()
+        result = await self.get_plant()
+        if self._session:
+            await self._session.close()
+        if result:
+            return self.plant_id
+        return None
 
     async def authenticate(self) -> bool:
         """Authenticate to the Sol-Ark cloud. Creates and holds a session."""
@@ -292,7 +302,9 @@ class InverterAPI:
             self.efficiency = infos[0].get("efficiency", DEFAULT_INVERTER_EFFICIENCY)
             self.plant_address = infos[0].get("address", None)
             self.plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
-        return True
+
+        # With the plant info, go get the plant inverter serial number
+        return await self.get_inverter_sn()
 
     async def get_inverter_sn(self) -> bool:
         """Get the inverter SN and build API endpoints. Done once when first updating sensor data."""
@@ -326,12 +338,6 @@ class InverterAPI:
 
     async def refresh_data(self) -> None:
         """Update statistics on this plant's various components and return them as a dict."""
-        # At startup, make sure we have the inverter serial number (and built the api endpoints)
-        if self.inverter_serial_number is None:
-            result = await self.get_inverter_sn()
-            if result is False:
-                return
-
         # Get the realtime stats for this plant, raising an exception if there is a problem
         await self._read_settings()
         await self._update_flow()
@@ -342,12 +348,12 @@ class InverterAPI:
         # return self.to_dict()
 
     async def _update_flow(self) -> None:
-        """Get statistics on this plant's battery."""
-        logger.debug("Updating battery")
+        """Get statistics on this plant's flow."""
+        logger.debug("Updating realtime power flow data")
         # Double check the validity of the cloud session.
-        data = await self._request("GET", self.urls["battery"], body={})
+        data = await self._request("GET", self.urls["flow"], body={})
         if data is None:
-            logger.error("Unable to update battery information")
+            logger.error("Unable to update realtime power flow information")
             return
 
         self.realtime_battery_soc = self.safe_get(data, "soc")
@@ -379,7 +385,7 @@ class InverterAPI:
             self.batt_wh_per_percent = batt_capacity_ah * batt_float_voltage / 100
 
             self.batt_wh_usable = int(
-                self.batt_wh_per_percent * (self.batt_soc - batt_shutdown)
+                self.batt_wh_per_percent * (self.realtime_battery_soc - batt_shutdown)
             )
             logger.debug("Current battery charge: %s wH", self.batt_wh_usable)
 

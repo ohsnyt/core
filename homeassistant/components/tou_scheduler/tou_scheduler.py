@@ -42,7 +42,7 @@ class TOUScheduler:
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the TOU Scheduler."""
         self.hass = hass
-        self.entry = entry
+        self.data = entry
         # self.dashboard_card = DashboardCard()
         self.timezone = hass.config.time_zone or "UTC"
 
@@ -105,7 +105,7 @@ class TOUScheduler:
             else "unknown",
             "cloud_name": self.inverter_api.cloud_name,
             "batt_wh_usable": self.inverter_api.batt_wh_usable or "0",
-            "batt_soc": self.inverter_api.batt_soc,
+            "batt_soc": self.inverter_api.realtime_battery_soc,
             "power_battery": self.inverter_api.realtime_battery_power,
             "power_grid": self.inverter_api.realtime_grid_power,
             "power_load": self.inverter_api.realtime_load_power,
@@ -123,7 +123,7 @@ class TOUScheduler:
             "plant_name": self.inverter_api.plant_name or "unknown",
             "plant_status": str(self.inverter_api.plant_status),
             # Solcast data
-            "pv_estimated_power": self.solcast_api.get_current_hour_pv_estimate(
+            "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(
                 current_hour
             ),
             "sun": self.solcast_api.get_current_hour_sun_estimate(current_hour),
@@ -132,7 +132,7 @@ class TOUScheduler:
     def authenticate(self) -> None:
         """Start the TOU Scheduler."""
         # First save the entry data
-        entry_data = self.entry.data
+        entry_data = self.data.data
         # Get username and password from configuration, if missing log an error and return
         inverter_username = entry_data.get("username")
         inverter_password = entry_data.get("password")
@@ -142,6 +142,7 @@ class TOUScheduler:
         # Set inverter key variables
         self.inverter_api.username = inverter_username
         self.inverter_api.password = inverter_password
+        self.inverter_api.plant_id = entry_data.get("plant_id") or "unknown"
         self.inverter_api.timezone = self.timezone or "UTC"
         self.inverter_api.grid_boost_midnight_soc = entry_data.get(
             GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
@@ -165,6 +166,7 @@ class TOUScheduler:
         if await self.inverter_api.authenticate() is False:
             logger.error("Inverter authentication failed")
             return
+        await self.inverter_api.get_plant()
         await self.solcast_api.refresh_data()
         if self.solcast_api.status == SolcastStatus.NOT_CONFIGURED:
             logger.error("Solcast API key or resource ID is missing")
@@ -283,7 +285,7 @@ class TOUScheduler:
             return
 
         # Get the past GRID_BOOST_HISTORY number of days of load data
-        days_of_load_history = self.entry.data.get(
+        days_of_load_history = self.data.data.get(
             GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY
         )
         load_entity_ids = {
@@ -346,7 +348,7 @@ class TOUScheduler:
         # Get the current usable battery power
         batt_wh_usable = self.inverter_api.batt_wh_usable or 0
         # Get the minimum amount of battery power we want to keep in reserve
-        midnight_soc = self.entry.data.get(
+        midnight_soc = self.data.data.get(
             GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
         )
 
@@ -368,8 +370,8 @@ class TOUScheduler:
             if (
                 current_hour
                 in range(
-                    int(self.inverter_api.grid_boost_start),
-                    int(self.inverter_api.grid_boost_end),
+                    int(self.grid_boost_start.split(":", maxsplit=1)[0]),
+                    int(self.inverter_api.grid_boost_end.split(":", maxsplit=1)[0]),
                 )
                 and self.grid_boost_on == ON
             ):

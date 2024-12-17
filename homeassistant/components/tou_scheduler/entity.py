@@ -1,9 +1,7 @@
 """Entity classes for TOU Scheduler entity."""
 
-from datetime import UTC
 import logging
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from homeassistant.components.sensor import SensorStateClass
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -153,7 +151,7 @@ class PlantEntity(CoordinatorEntity):
         """Return the state of the sensor."""
         if self.coordinator.data is None:
             return Plant.UNKNOWN.name
-        return self.coordinator.data.get("plant_status", Plant.UNKNOWN).name
+        return self.coordinator.data.get("plant_status", Plant.UNKNOWN.name)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -204,7 +202,7 @@ class InverterEntity(CoordinatorEntity):
         """Return the state of the sensor."""
         if self.coordinator.data is None:
             return Plant.UNKNOWN.name
-        return self.coordinator.data.get("inverter_status", Inverter.UNKNOWN).name
+        return self.coordinator.data.get("inverter_status", Inverter.UNKNOWN.name)
 
     @property
     def unique_id(self) -> str | None:
@@ -292,11 +290,17 @@ class CloudEntity(CoordinatorEntity):
     @property
     def attributes(self) -> dict[str, Any]:
         """Return the created date and bearer_token expiry date for the cloud sensor."""
+        # return {
+        #     "created": self.coordinator.data["plant_created"]
+        #     .replace(tzinfo=UTC)
+        #     .astimezone(ZoneInfo("America/Chicago"))
+        #     .strftime("%I:%M %p"),
+        #     "bearer_token_expires_on": self.coordinator.data.get(
+        #         "bearer_token_expires_on", "Unknown"
+        #     ),
+        # }
         return {
-            "created": self.coordinator.data["plant_created"]
-            .replace(tzinfo=UTC)
-            .astimezone(ZoneInfo("America/Chicago"))
-            .strftime("%I:%M %p"),
+            "created": self.coordinator.data["plant_created"],
             "bearer_token_expires_on": self.coordinator.data.get(
                 "bearer_token_expires_on", "Unknown"
             ),
@@ -312,7 +316,7 @@ class CloudEntity(CoordinatorEntity):
         """Return the state of the sensor."""
         data_updated = self.coordinator.data.get("data_updated")
         if data_updated:
-            return "Updated at " + data_updated.strftime("%I:%M %p")
+            return "Updated at " + data_updated
         return "Update time not available"
 
     @property

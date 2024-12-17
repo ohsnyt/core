@@ -40,11 +40,11 @@ class OhSnytSensorEntityDescription(SensorEntityDescription):
 
 TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
     # Solcast related sensors
-    "estimated_pv_power": OhSnytSensorEntityDescription(
-        key="estimated_pv_power",
-        translation_key="estimated_pv_power",
+    "power_pv_estimated": OhSnytSensorEntityDescription(
+        key="power_pv_estimated",
+        translation_key="power_pv_estimated",
         has_entity_name=True,
-        name="estimated_pv_power",
+        name="Estimated PV power",
         icon="mdi:flash",
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_unit_of_measurement=UnitOfPower.WATT,
@@ -58,17 +58,13 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         has_entity_name=True,
         name="sun",
         icon="mdi:flash",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        suggested_unit_of_measurement=UnitOfPower.WATT,
-        suggested_display_precision=0,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
+        # This is a string, "full", "partial", or "dark"
     ),
-    "pv_power": OhSnytSensorEntityDescription(
-        key="pv_power",
-        translation_key="pv_power",
+    "power_pv": OhSnytSensorEntityDescription(
+        key="power_pv",
+        translation_key="power_pv",
         has_entity_name=True,
-        name="pv_power",
+        name="PV power",
         icon="mdi:flash",
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_unit_of_measurement=UnitOfPower.WATT,
@@ -76,11 +72,11 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "battery_state_of_charge": OhSnytSensorEntityDescription(
-        key="battery_state_of_charge",
-        translation_key="battery_state_of_charge",
+    "batt_soc": OhSnytSensorEntityDescription(
+        key="batt_soc",
+        translation_key="batt_soc",
         has_entity_name=True,
-        name="battery_state_of_charge",
+        name="Battery State of Charge",
         icon="mdi:flash",
         native_unit_of_measurement=UnitOfPower.WATT,
         suggested_unit_of_measurement=UnitOfPower.WATT,
@@ -97,17 +93,6 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         suggested_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
         suggested_display_precision=0,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    "batt_soc": OhSnytSensorEntityDescription(
-        key="batt_soc",
-        translation_key="batt_soc",
-        has_entity_name=True,
-        name="batt_soc",
-        native_unit_of_measurement="%",
-        suggested_unit_of_measurement="%",
-        suggested_display_precision=0,
-        device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     "power_battery": OhSnytSensorEntityDescription(
@@ -143,17 +128,6 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "power_pv": OhSnytSensorEntityDescription(
-        key="power_pv",
-        translation_key="power_pv",
-        has_entity_name=True,
-        name="power_pv",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        suggested_unit_of_measurement=UnitOfPower.WATT,
-        suggested_display_precision=0,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
 }
 
 
@@ -167,7 +141,7 @@ async def async_setup_entry(
     # Get the coordinator from hass.data (It should already have data.)
     coordinator = hass.data[DOMAIN][entry.entry_id]
     # Double check that we have data
-    if coordinator.data == {}:
+    if coordinator.entry.data == {}:
         await coordinator.async_request_refresh()
 
     # Add the entity device level sensors: Cloud, Plant, Inverter, Solcast, Shading.
@@ -209,12 +183,16 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._attr_name = f"Solark {entity_description.name}"
+        # Set the icon
+        self._attr_icon = (
+            entity_description.icon if entity_description.icon else "mdi:flash"
+        )
+        # Set the name and description
+        self._attr_name = f"ToU {entity_description.name}"
         self.entity_description = entity_description
-
-        # And then set the sensor unique_id and device_info
+        # And then set the key and sensor unique_id
         self._key = entity_description.key
-        self._attr_unique_id = f"{entry_id}_{self._key}"
+        self._attr_unique_id = f"{entry_id}_{entity_description.key}"
         # self._device_info = entity_description
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
@@ -227,6 +205,10 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         """Return the name of the sensor."""
         return self._attr_name
 
+    # @property
+    # def state(self) -> str | int | float | None:
+    #     """Return the state of the sensor."""
+    #     return self.coordinator.data[self._key]
     @property
     def native_value(self) -> StateType | None | str | int | float:
         """Return the state of the sensor."""

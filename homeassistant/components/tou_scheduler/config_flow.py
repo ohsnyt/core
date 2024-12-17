@@ -240,13 +240,16 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         temp_inverter_api = InverterAPI()
         temp_inverter_api.username = user_input.get("username")
         temp_inverter_api.password = user_input.get("password")
-        if await temp_inverter_api.authenticate():
+        # Try to authenticate and get the plant id. If we get the plant id, we are good to go.
+        plant_id = await temp_inverter_api.test_authenticate()
+        if plant_id is not None:
             # We have successfully logged in. Get the plant list.
             return self.async_create_entry(
                 title="Sol-Ark Plant",
                 data={
-                    "username": self.username,
-                    "password": self.password,
+                    "username": user_input.get("username"),
+                    "password": user_input.get("password"),
+                    "plant_id": plant_id,
                 },
             )
         # If we get here, the login failed. Try to authenticate again.
