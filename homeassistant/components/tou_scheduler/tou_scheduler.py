@@ -25,7 +25,6 @@ from .const import (
     ON,
     SOLCAST_API_KEY,
     SOLCAST_RESOURCE_ID,
-    TIMEZONE,
 )
 from .solark_inverter_api import InverterAPI
 from .solcast_api import SolcastAPI, SolcastStatus
@@ -45,7 +44,7 @@ class TOUScheduler:
         self.hass = hass
         self.entry = entry
         # self.dashboard_card = DashboardCard()
-        self.timezone: str = "UTC"
+        self.timezone = hass.config.time_zone or "UTC"
 
         # Here is the inverter info
         self.inverter_api: InverterAPI = InverterAPI()
@@ -134,8 +133,6 @@ class TOUScheduler:
         """Start the TOU Scheduler."""
         # First save the entry data
         entry_data = self.entry.data
-        # Get the timezone from configuration, revert to UTC if missing
-        self.timezone = entry_data.get(TIMEZONE, "UTC")
         # Get username and password from configuration, if missing log an error and return
         inverter_username = entry_data.get("username")
         inverter_password = entry_data.get("password")
@@ -145,7 +142,7 @@ class TOUScheduler:
         # Set inverter key variables
         self.inverter_api.username = inverter_username
         self.inverter_api.password = inverter_password
-        self.inverter_api.timezone = entry_data.get(TIMEZONE, "UTC")
+        self.inverter_api.timezone = self.timezone or "UTC"
         self.inverter_api.grid_boost_midnight_soc = entry_data.get(
             GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
         )
@@ -161,7 +158,7 @@ class TOUScheduler:
         # Set Solcast key variables
         self.solcast_api.api_key = api_key
         self.solcast_api.resource_id = resource_id
-        self.solcast_api.timezone = entry_data.get(TIMEZONE, "UTC")
+        self.solcast_api.timezone = self.timezone or "UTC"
 
     async def async_start(self) -> None:
         """Start the TOU Scheduler, making sure the inverter api and solcast api authenticate."""

@@ -29,7 +29,6 @@ from .const import (
     DEFAULT_SOLCAST_PERCENTILE,
     DEFAULT_SOLCAST_UPDATE_HOURS,
     TIMEOUT,
-    TIMEZONE,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ class SolcastAPI:
         self._api_key: str | None = None
         self._resource_id: str | None = None
         self.forecast: dict[str, tuple[float, bool]] = {}
-        self.timezone: str = TIMEZONE
+        self.timezone: str = "America/Chicago"
         self.status = SolcastStatus.UNKNOWN
         self.data_updated: datetime | None = None
         # forecast is a dictionary of hourly estimates with the date/hour as the key and the value as a tuple of float and bool.
@@ -129,6 +128,8 @@ class SolcastAPI:
         This method populates the forecast dictionary with hourly estimates, updates the energy production for tomorrow,
         and handles damping factors.
         """
+        # logger.info("Timezone is: %s", self.timezone)
+        # self.timezone = "America/Chicago"
         # If we don't have a Solcast API key, set the status to not_configured and return.
         if not (self._api_key and self._resource_id):
             logger.error(
@@ -204,7 +205,7 @@ class SolcastAPI:
             df.drop(columns=["period"], inplace=True)
 
         # Resample to hourly intervals, summing 30-minute increments
-        df = df.resample("H", on="period_end").mean().reset_index()
+        df = df.resample("h", on="period_end").mean().reset_index()
 
         # Add a column that checks for full sun. Full sun is true if the 50th percentile is the same as the 90th percentile.
         df["is_full_sun"] = df["pv_estimate"] == df["pv_estimate90"]
@@ -217,6 +218,7 @@ class SolcastAPI:
             )
             for _, row in df.iterrows()
         }  # All done
+        self.status = SolcastStatus.API_NORMAL
 
     async def _api_call(self) -> bool:
         """Make the Solcast API call."""
@@ -241,6 +243,7 @@ class SolcastAPI:
                 await file.write(data)
 
             # Update the self.data_updated time and api status
+            logger.info("Timezone is: %s", self.timezone)
             self.data_updated = datetime.now(ZoneInfo(self.timezone))
             self.status = SolcastStatus.API_NORMAL
         except aiohttp.ClientResponseError as errh:

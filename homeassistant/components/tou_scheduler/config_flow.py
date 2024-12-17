@@ -31,10 +31,9 @@ from .const import (  # Changed to relative import
     SOLCAST_PERCENTILE_LOW,
     SOLCAST_RESOURCE_ID,
     SOLCAST_UPDATE_HOURS,
-    TIMEZONE,
 )
-from .inverter import Cloud
-from .solcast import SolcastEstimator, SolcastStatus
+from .solark_inverter_api import InverterAPI  # Add this import
+from .solcast_api import SolcastAPI, SolcastStatus
 
 _logger = logging.getLogger(__name__)
 if DEBUGGING:
@@ -54,10 +53,9 @@ DATA_SCHEMA = vol.Schema(
 class TouSchedulerOptionFlow(OptionsFlow):
     """Handle options flow for our component."""
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
+    def __init__(self) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
-        self.timezone = config_entry.data.get(TIMEZONE, "UTC")
+        # Nothing to do here
 
     async def get_error_message(self, error_key):
         """Retrieve the error message associated with error_key from strings.json."""
@@ -93,20 +91,17 @@ class TouSchedulerOptionFlow(OptionsFlow):
             # If we are good so far, check if the login credentials are valid
             if not errors:
                 # Test the new credentials
-                solcast = SolcastEstimator(
-                    api_key=api_key,
-                    resource_id=resource_id,
-                    timezone=self.timezone,
-                )
+                solcast = SolcastAPI()
+                solcast.api_key = api_key
+                solcast.resource_id = resource_id
                 # If the credentials are good, make the temporary solcast instance the permanent one and update the other options
-                await solcast.refresh_solcast_data()
+                await solcast.refresh_data()
                 if solcast.status == SolcastStatus.UNKNOWN:
                     errors[SOLCAST_API_KEY] = "invalid_keys"
                     errors[SOLCAST_RESOURCE_ID] = "invalid_keys"
             # Last error check
             if not errors:
                 # All is in order. Save the user input for the next time we need it.
-
                 # Return the data.
                 return self.async_create_entry(
                     title=BOOST_OPTIONS,
@@ -221,14 +216,14 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry: ConfigEntry) -> TouSchedulerOptionFlow:
         """Get the options flow."""
         _logger.debug("Passing handler to TouSchedulerOptionFlow")
-        return TouSchedulerOptionFlow(config_entry)
+        # return TouSchedulerOptionFlow(config_entry)
+        return TouSchedulerOptionFlow()
 
     def __init__(self) -> None:
         """Initialize the config flow."""
         self.username: str | None = None
         self.password: str | None = None
         self.plant_id: str | None = None
-        self.timezone = "UTC"
 
     async def async_step_user(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Start here. Allow only one instance of the cloud."""
@@ -241,36 +236,19 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="user", data_schema=DATA_SCHEMA, errors=errors
             )
 
-        # Now that we have a username and password, we can try to authenticate with the cloud and get the plant list.
-        temp_cloud = Cloud(self.hass)
-        plant_list = await temp_cloud.test_authenticate(
-            user_input.get("username"), user_input.get("password")
-        )
-        self.timezone = temp_cloud.timezone
-        del temp_cloud
-
-        if plant_list:
-            # We have successfully logged in.
-            self.username = user_input.get("username")
-            self.password = user_input.get("password")
-            # If there is only one plant in the account, we can skip the plant selection step.
-            if len(plant_list) == 1:
-                plant_id = list(plant_list.keys())[0]
-                # Just return the key info
-                logging.info(
-                    "Finished the configuration and closed the authorization session."
-                )
-                return self.async_create_entry(
-                    title="Sol-Ark Plant",
-                    data={
-                        "username": self.username,
-                        "password": self.password,
-                        "plant_id": plant_id,
-                        TIMEZONE: self.timezone,
-                    },
-                )
-            # Otherwise, we need to ask the user to select a plant from the list and return from there
-            return await self.async_step_plant(plant_list, None)
+        # Now that we have a username and password, we can try to authenticate with the inverter cloud and get the plant list.
+        temp_inverter_api = InverterAPI()
+        temp_inverter_api.username = user_input.get("username")
+        temp_inverter_api.password = user_input.get("password")
+        if await temp_inverter_api.authenticate():
+            # We have successfully logged in. Get the plant list.
+            return self.async_create_entry(
+                title="Sol-Ark Plant",
+                data={
+                    "username": self.username,
+                    "password": self.password,
+                },
+            )
         # If we get here, the login failed. Try to authenticate again.
         errors["base"] = "login_failed"
         return self.async_show_form(
@@ -297,7 +275,6 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "username": self.username,
                 "password": self.password,
                 "plant_id": user_input.get("plant", None),
-                TIMEZONE: self.timezone,
             },
         )
 

@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .const import DEBUGGING, DOMAIN
-from .inverter import Inverter, Plant
+from .solark_inverter_api import Inverter, Plant
 
 logger = logging.getLogger(__name__)
 if DEBUGGING:
@@ -151,8 +151,9 @@ class PlantEntity(CoordinatorEntity):
     @property
     def state(self) -> str:
         """Return the state of the sensor."""
-        status = self.coordinator.data.get("plant_status", Plant.UNKNOWN)
-        return status if isinstance(status, str) else Plant.UNKNOWN
+        if self.coordinator.data is None:
+            return Plant.UNKNOWN.name
+        return self.coordinator.data.get("plant_status", Plant.UNKNOWN).name
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -201,8 +202,9 @@ class InverterEntity(CoordinatorEntity):
     @property
     def state(self) -> str:
         """Return the state of the sensor."""
-        status = self.coordinator.data.get("inverter_status", Inverter.UNKNOWN)
-        return status if isinstance(status, str) else Inverter.UNKNOWN
+        if self.coordinator.data is None:
+            return Plant.UNKNOWN.name
+        return self.coordinator.data.get("inverter_status", Inverter.UNKNOWN).name
 
     @property
     def unique_id(self) -> str | None:

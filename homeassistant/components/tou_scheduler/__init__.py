@@ -19,6 +19,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the TOU Scheduler integration."""
     # Perform any global setup here if needed
+
     return True
 
 

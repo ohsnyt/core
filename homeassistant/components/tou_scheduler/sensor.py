@@ -2,8 +2,6 @@
 
 import logging
 
-from entities import TOUSensorEntityDescription
-
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -20,14 +18,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEBUGGING, DOMAIN
 from .coordinator import OhSnytUpdateCoordinator
-from .entities import (
+from .entity import (
     BatteryEntity,
     CloudEntity,
     InverterEntity,
     PlantEntity,
     ShadingEntity,
+    TOUSchedulerEntity,
 )
-from .entity import TOUSchedulerEntity
 
 logger = logging.getLogger(__name__)
 if DEBUGGING:
@@ -40,9 +38,9 @@ class OhSnytSensorEntityDescription(SensorEntityDescription):
     """Describes a sensor."""
 
 
-TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
+TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
     # Solcast related sensors
-    "estimated_pv_power": TOUSensorEntityDescription(
+    "estimated_pv_power": OhSnytSensorEntityDescription(
         key="estimated_pv_power",
         translation_key="estimated_pv_power",
         has_entity_name=True,
@@ -54,7 +52,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "sun": TOUSensorEntityDescription(
+    "sun": OhSnytSensorEntityDescription(
         key="sun",
         translation_key="sun",
         has_entity_name=True,
@@ -66,7 +64,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "pv_power": TOUSensorEntityDescription(
+    "pv_power": OhSnytSensorEntityDescription(
         key="pv_power",
         translation_key="pv_power",
         has_entity_name=True,
@@ -78,7 +76,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "battery_state_of_charge": TOUSensorEntityDescription(
+    "battery_state_of_charge": OhSnytSensorEntityDescription(
         key="battery_state_of_charge",
         translation_key="battery_state_of_charge",
         has_entity_name=True,
@@ -90,7 +88,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "batt_wh_usable": TOUSensorEntityDescription(
+    "batt_wh_usable": OhSnytSensorEntityDescription(
         key="batt_wh_usable",
         translation_key="batt_wh_usable",
         has_entity_name=True,
@@ -101,7 +99,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "batt_soc": TOUSensorEntityDescription(
+    "batt_soc": OhSnytSensorEntityDescription(
         key="batt_soc",
         translation_key="batt_soc",
         has_entity_name=True,
@@ -112,7 +110,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "power_battery": TOUSensorEntityDescription(
+    "power_battery": OhSnytSensorEntityDescription(
         key="power_battery",
         translation_key="power_battery",
         has_entity_name=True,
@@ -123,7 +121,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "power_grid": TOUSensorEntityDescription(
+    "power_grid": OhSnytSensorEntityDescription(
         key="power_grid",
         translation_key="power_grid",
         has_entity_name=True,
@@ -134,7 +132,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "power_load": TOUSensorEntityDescription(
+    "power_load": OhSnytSensorEntityDescription(
         key="power_load",
         translation_key="power_load",
         has_entity_name=True,
@@ -145,7 +143,7 @@ TOU_SENSOR_ENTITIES: dict[str, TOUSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "power_pv": TOUSensorEntityDescription(
+    "power_pv": OhSnytSensorEntityDescription(
         key="power_pv",
         translation_key="power_pv",
         has_entity_name=True,
