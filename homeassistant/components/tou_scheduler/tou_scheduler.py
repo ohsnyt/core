@@ -406,7 +406,7 @@ class TOUScheduler:
 
             logger.debug(
                 "Battery life remaining at %s is %s",
-                printable_hour(current_hour),
+                printable_hour(datetime.now(ZoneInfo(self.timezone)).hour),
                 batt_wh_usable,
             )
 

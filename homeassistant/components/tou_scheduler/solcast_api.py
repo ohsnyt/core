@@ -98,28 +98,6 @@ class SolcastAPI:
         """Set the hours to update Solcast data."""
         self._update_hours = value
 
-    # def to_dict(self) -> dict[str, Any]:
-    #     """Return this sensor data as a dictionary.
-
-    #     This method provides pv forecast statistics and sun sensor data for the current hour so the TOU entity can
-    #     compute estimated power from this historical data.
-
-    #     Returns:
-    #         dict[str, Any]: A dictionary containing the sensor data.
-
-    #     """
-    #     logger.debug("Returning solcast sensor data as dict")
-
-    #     # Get the current hour
-    #     now = datetime.now(ZoneInfo(self.timezone))
-    #     current_hour = f"{now.date()}-{now.hour}"
-    #     return {
-    #         # PV estimate for the current hour
-    #         "pv_estimated_power": self.get_current_hour_pv_estimate(current_hour),
-    #         # Sun info for the current hour: full, partial, or dark
-    #         "sun": self.get_current_hour_sun_estimate(current_hour),
-    #     }
-
     def get_current_hour_pv_estimate(self, current_hour: str) -> float:
         """Get the estimate for the current hour PV."""
         # Return the current hour estimate
@@ -127,8 +105,15 @@ class SolcastAPI:
 
     def get_current_hour_sun_estimate(self, current_hour: str) -> str:
         """Get the sun status for the current hour."""
-        # Return the current hour sun status
-        return "full" if self.forecast.get(current_hour, (0.0, False))[1] else "partial"
+        # Get the current hour estimate.
+        (pv, sun) = self.forecast.get(current_hour, (0.0, False))
+        # If no PV, it is dark.
+        if pv == 0:
+            return "dark"
+        # If sun is true, it is full sun. Otherwise, it is partial sun.
+        if sun:
+            return "full"
+        return "partial"
 
     async def refresh_data(self) -> None:
         """Refresh Solcast data.
@@ -138,8 +123,6 @@ class SolcastAPI:
         This method populates the forecast dictionary with hourly estimates, updates the energy production for tomorrow,
         and handles damping factors.
         """
-        # logger.info("Timezone is: %s", self.timezone)
-        # self.timezone = "America/Chicago"
         # If we don't have a Solcast API key, set the status to not_configured and return.
         if not (self._api_key and self._resource_id):
             logger.error(
@@ -212,7 +195,8 @@ class SolcastAPI:
 
         # Drop the 'period' column if it exists in the resampled DataFrame
         if "period" in df.columns:
-            df.drop(columns=["period"], inplace=True)
+            # df.drop(columns=["period"], inplace=True)
+            await asyncio.to_thread(df.drop, columns=["period"], inplace=True)
 
         # Resample to hourly intervals, summing 30-minute increments
         df = df.resample("h", on="period_end").mean().reset_index()

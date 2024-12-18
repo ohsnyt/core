@@ -1,5 +1,6 @@
 """Entity classes for TOU Scheduler entity."""
 
+import ast
 import logging
 from typing import Any
 
@@ -52,7 +53,7 @@ class TOUSchedulerEntity(CoordinatorEntity):
         """Return the state of the grid boost."""
         return (
             "Boost ON"
-            if self.coordinator.data.get("grid_boost_on", "OFF") == "ON"
+            if self.coordinator.data.get("grid_boost_on", "off") == "on"
             else "Boost OFF"
         )
 
@@ -245,7 +246,7 @@ class ShadingEntity(CoordinatorEntity):
     @property
     def state(self) -> str:
         """Return the average shading for the day."""
-        self._hours = self.coordinator.data.get("shading", {})
+        self._hours = ast.literal_eval(self.coordinator.data.get("shading", {}))
         shade = ""
         for hour, value in self._hours.items():
             if value != 0:

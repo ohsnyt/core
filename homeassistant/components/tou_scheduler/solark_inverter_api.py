@@ -335,7 +335,9 @@ class InverterAPI:
         )
         logger.debug("Current battery charge: %s wH", self.batt_wh_usable)
 
-        self.data_updated = datetime.now().strftime("%a %I:%M %p")
+        self.data_updated = datetime.now(ZoneInfo(self.timezone)).strftime(
+            "%a %I:%M %p"
+        )
 
     async def _read_settings(self) -> dict[str, Any]:
         """Read the inverter settings and set self values."""
