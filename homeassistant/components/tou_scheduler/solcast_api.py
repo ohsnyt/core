@@ -55,7 +55,7 @@ class SolcastAPI:
         # General info
         self._api_key: str | None = None
         self._resource_id: str | None = None
-        self.forecast: dict[str, tuple[float, bool]] = {}
+        self.forecast: dict[str, tuple[float, float]] = {}
         self.timezone: str = "America/Chicago"
         self.status = SolcastStatus.UNKNOWN
         self.data_updated: datetime | None = None
@@ -101,19 +101,12 @@ class SolcastAPI:
     def get_current_hour_pv_estimate(self, current_hour: str) -> float:
         """Get the estimate for the current hour PV."""
         # Return the current hour estimate
-        return self.forecast.get(current_hour, (0.0, False))[0]
+        return self.forecast.get(current_hour, (0.0, 0.0))[0]
 
-    def get_current_hour_sun_estimate(self, current_hour: str) -> str:
+    def get_current_hour_sun_estimate(self, current_hour: str) -> float:
         """Get the sun status for the current hour."""
-        # Get the current hour estimate.
-        (pv, sun) = self.forecast.get(current_hour, (0.0, False))
-        # If no PV, it is dark.
-        if pv == 0:
-            return "dark"
-        # If sun is true, it is full sun. Otherwise, it is partial sun.
-        if sun:
-            return "full"
-        return "partial"
+        # Return the current hour estimate
+        return self.forecast.get(current_hour, (0.0, 0.0))[1]
 
     async def refresh_data(self) -> None:
         """Refresh Solcast data.
@@ -201,14 +194,18 @@ class SolcastAPI:
         # Resample to hourly intervals, summing 30-minute increments
         df = df.resample("h", on="period_end").mean().reset_index()
 
-        # Add a column that checks for full sun. Full sun is true if the 50th percentile is the same as the 90th percentile.
-        df["is_full_sun"] = df["pv_estimate"] == df["pv_estimate90"]
+        # Round the pv_estimate and pv_estimate90 columns to one decimal place
+        df["pv_estimate"] = df["pv_estimate"].round(1)
+        df["pv_estimate90"] = df["pv_estimate90"].round(1)
+
+        # Add a column that checks for full sun. This is the 50th percentile / the 90th percentile, both rounded to 1 decimal place.
+        df["sun_ratio"] = (df["pv_estimate"] / df["pv_estimate90"]).round(1)
 
         # Create a dictionary with the local date and hour (yyyy-mm-dd-h) as the key and target_pv and is_full_sun as the value list
         self.forecast = {
             f"{row['period_end'].date()}-{row['period_end'].hour}": (
                 row["target_pv"],
-                row["is_full_sun"],
+                row["sun_ratio"],
             )
             for _, row in df.iterrows()
         }  # All done
@@ -274,4 +271,13 @@ class SolcastStatus(Enum):
     API_FAULT = 1
     API_NORMAL = 2
     CANNOT_READ = 3
+    UNKNOWN = 9
+
+
+class SunStatus(Enum):
+    """Sun status for the current hour."""
+
+    DARK = 0
+    PARTIAL = 1
+    FULL = 2
     UNKNOWN = 9

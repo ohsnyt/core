@@ -383,7 +383,8 @@ class InverterAPI:
             logger.info("Grid boost is off. Not writing SoC setting")
             return
 
-        logger.debug("Writing grid boosts SoC setting")
+        logger.debug("Pretending to grid boost SoC setting")
+        # logger.debug("Writing grid boost SoC setting")
         # Set the inverter settings for Time of Use block 1, State of Charge
         body = {}
         body["cap1"] = str(self.grid_boost_starting_soc)

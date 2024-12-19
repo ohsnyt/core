@@ -8,6 +8,8 @@ import logging
 from math import ceil
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from homeassistant.components.recorder import get_instance, statistics
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -129,9 +131,10 @@ class TOUScheduler:
             "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(
                 current_hour
             ),
-            "sun": self.solcast_api.get_current_hour_sun_estimate(current_hour),
+            "sun_ratio": self.solcast_api.get_current_hour_sun_estimate(current_hour),
             # Shading data
             "shading": str(self.shading),
+            "load": str(self.daily_load_averages),
         }
 
     def authenticate(self) -> None:
@@ -188,30 +191,49 @@ class TOUScheduler:
 
     async def update_sensors(self) -> dict[str, int | float | str]:
         """Update the sensors with the latest data and return the updated sensor data as a dictionary."""
-        # Update the inverter data
+        # Update the inverter data for the sensors (done every 5 minutes)
+        #   (This must be done first because the other updates depend on current inverter data, especially at startup)
         await self.inverter_api.refresh_data()
 
-        # Update the Solcast data
+        # Once a day...
+        # ...Update the Solcast data
         await self.solcast_api.refresh_data()
-
-        # Make sure we have the up-to-date forecast data from Solcast
-        await self.solcast_api.refresh_data()
-
-        # Make sure we have shading data for today
+        # ...Update our daily shading values based on yesterday's data
         await self._calculate_shading()
-
-        # Make sure we have the hourly load averages for today
+        # ...Update the hourly load estimates
         await self._calculate_load_estimates()
 
-        # Based on expected pv, shading, and load averages, compute remaining battery life and the grid boost SOC, logging any changes and updating the inverter
-        await self.calculate_tou_parameters()
+        # Hourly based on the above daily information...
+        #  ...compute remaining battery life and the grid boost SOC...
+        #     ...and update the inverter if the grid boost SoC changes
+        await self._calculate_tou_parameters()
 
+        # Return the updated sensor data
         return self.to_dict()
 
     async def _calculate_shading(self) -> None:
         """Calculate the shading for the past day.
 
         We do this once a day after midnight.
+        The structure of the history_data is:
+        defaultdict(<class 'list'>, {
+            'sensor.tou_estimated_pv_power_2': [
+                {'start': 1734462000.0, 'end': 1734465600.0, 'mean': 0.0},
+                {'start': 1734465600.0, 'end': 1734469200.0, 'mean': 0.0}
+            ],
+            'sensor.tou_power_pv': [
+                {'start': 1734451200.0, 'end': 1734454800.0, 'mean': 996.4999999999999},
+                {'start': 1734454800.0, 'end': 1734458400.0, 'mean': 3661.353196273056}
+            ],
+            'sensor.tou_batt_soc': [
+                {'start': 1734454800.0, 'end': 1734458400.0, 'mean': 0.0},
+                {'start': 1734458400.0, 'end': 1734462000.0, 'mean': 24.58621105}
+            ],
+            'sensor.tou_sun_ratio': [
+                {'start': 1734454800.0, 'end': 1734458400.0, 'mean': 0.0},
+                {'start': 1734458400.0, 'end': 1734462000.0, 'mean': 1.0}
+            ]
+        })
         """
         # Skip if not at startup or already done today
         if (
@@ -222,66 +244,100 @@ class TOUScheduler:
         ):
             return
 
-        # Get the past 1 day of pv estimate, actual pv, sun, and battery state of charge data
+        # Get the past day of pv estimate, actual pv, sun, and battery state of charge data
         load_entity_ids = {
-            "sensor.solcast_estimated_pv_power",
-            "sensor.solcast_sun",
-            "sensor.solark_pv_power",
-            "sensor.solark_battery_state_of_charge",
+            "sensor.tou_estimated_pv_power",
+            "sensor.tou_sun_ratio",
+            "sensor.tou_power_pv",
+            "sensor.tou_batt_soc",
         }
         history_data = await self._request_ha_statistics(load_entity_ids, 1)
 
-        # For each hour of the past 24 hours, calculate the shading and update the shading dict
+        # Log the history_data to see its structure
+        # logger.debug("Multi-id History data: %s", history_data)
+
+        # Convert history_data to a dictionary for efficient lookups
+        history_data_dict = dict(history_data.items())
+
+        # Precompute the values for each hour
+        sun_ratios = {
+            hour: next(
+                (
+                    item["mean"]
+                    for item in history_data_dict.get("sensor.tou_sun_ratio", [])
+                    if datetime.fromtimestamp(
+                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
+                    ).hour
+                    == hour
+                ),
+                0.0,
+            )
+            for hour in range(24)
+        }
+        battery_socs = {
+            hour: next(
+                (
+                    item["mean"]
+                    for item in history_data_dict.get("sensor.tou_batt_soc", [])
+                    if datetime.fromtimestamp(
+                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
+                    ).hour
+                    == hour
+                ),
+                0.0,
+            )
+            for hour in range(24)
+        }
+        pv_powers = {
+            hour: next(
+                (
+                    item["mean"]
+                    for item in history_data_dict.get("sensor.tou_power_pv", [])
+                    if datetime.fromtimestamp(
+                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
+                    ).hour
+                    == hour
+                ),
+                0.0,
+            )
+            for hour in range(24)
+        }
+        pv_estimates = {
+            hour: next(
+                (
+                    item["mean"]
+                    for item in history_data_dict.get("sensor.tou_power_pv", [])
+                    if datetime.fromtimestamp(
+                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
+                    ).hour
+                    == hour
+                ),
+                0.0,
+            )
+            for hour in range(24)
+        }
+
+        # If the sun was full and the battery was charging we can adjust the shading, otherwise leave it alone
         for hour in range(24):
-            try:
-                # Get values with defaults if missing
-                sun_status = history_data.get("sensor.solcast_sun", {}).get(
-                    hour, "unknown"
-                )
-                battery_soc = history_data.get(
-                    "sensor.solark_battery_state_of_charge", {}
-                ).get(hour, 100)
-                pv_power = history_data.get("sensor.solark_pv_power", {}).get(hour, 0)
-                estimated_pv = history_data.get(
-                    "sensor.solcast_estimated_pv_power", {}
-                ).get(hour, 0)
+            sun_ratio = sun_ratios[hour]
+            battery_soc = battery_socs[hour]
+            pv_power = pv_powers[hour]
+            estimated_pv = pv_estimates[hour]
 
-                # If the sun was full and the battery was charging we can adjust the shading, otherwise leave it alone
-                if sun_status == "full" and battery_soc < 96:
-                    # Avoid division by zero, should never happen
-                    if estimated_pv > 0:
-                        shading = 1.0 - min(pv_power / estimated_pv, 1.0)
-                        log_message = (
-                            "remained at"
-                            if self.shading.get(hour) == shading
-                            else "changed to"
-                        )
-                        logger.info(
-                            "Shading for %s %s %s",
-                            printable_hour(hour),
-                            log_message,
-                            shading,
-                        )
-                        self.shading[hour] = shading
-                    else:
-                        shading = 1.0
-                        logger.warning(
-                            "Hour %s: Estimated PV power is zero or missing",
-                            printable_hour(hour),
-                        )
-
-            except KeyError as e:
-                logger.error(
-                    "KeyError processing hour %s: %s", printable_hour(hour), str(e)
+            if sun_ratio > 0.95 and battery_soc < 96:
+                shading = (
+                    1.0 - min(pv_power / estimated_pv, 1.0) if estimated_pv > 0 else 1.0
                 )
-            except TypeError as e:
-                logger.error(
-                    "TypeError processing hour %s: %s", printable_hour(hour), str(e)
+                log_message = (
+                    "remained at" if self.shading.get(hour) == shading else "changed to"
                 )
-            except ValueError as e:
-                logger.error(
-                    "ValueError processing hour %s: %s", printable_hour(hour), str(e)
+                logger.info(
+                    "Shading for %s %s %s",
+                    printable_hour(hour),
+                    log_message,
+                    shading,
                 )
+                self.shading[hour] = shading
 
     async def _calculate_load_estimates(self) -> None:
         """Calculate the daily load averages."""
@@ -298,48 +354,45 @@ class TOUScheduler:
         ):
             return
 
+        # logger.debug(">>>>>Calculating daily load averages<<<<<")
         # Get the past GRID_BOOST_HISTORY number of days of load data
         days_of_load_history = self.data.data.get(
             GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY
         )
         load_entity_ids = {
-            "sensor.solark_load_power",
+            "sensor.tou_power_load",
         }
         history_data = await self._request_ha_statistics(
             load_entity_ids, days_of_load_history
         )
 
-        # For each hour of the past 24 hours, calculate the average load and update the daily load averages dict
-        for hour in range(24):
-            try:
-                # Get the load power with a default of 0
-                load_power = history_data.get("sensor.solark_load_power", {}).get(
-                    hour, 0
-                )
+        # Log the history_data to see its structure
+        # logger.debug("History data: %s", history_data)
 
-                # Update the daily load averages dict
-                self.daily_load_averages[hour] = load_power
+        # Convert history_data to a DataFrame
+        data = []
+        for data_list in history_data.values():
+            for item in data_list:
+                start_time = datetime.fromtimestamp(
+                    item["start"], tz=ZoneInfo(self.inverter_api.timezone)
+                )
+                hour = start_time.hour
+                data.append({"hour": hour, "mean": item["mean"]})
 
-            except KeyError as e:
-                logger.error(
-                    "KeyError processing hour %s: %s", printable_hour(hour), str(e)
-                )
-                # Set default load power value
-                self.daily_load_averages[hour] = 0
-            except TypeError as e:
-                logger.error(
-                    "TypeError processing hour %s: %s", printable_hour(hour), str(e)
-                )
-                # Set default load power value
-                self.daily_load_averages[hour] = 0
-            except ValueError as e:
-                logger.error(
-                    "ValueError processing hour %s: %s", printable_hour(hour), str(e)
-                )
-                # Set default load power value
-                self.daily_load_averages[hour] = 0
+        df = pd.DataFrame(data)
 
-    async def calculate_tou_parameters(self) -> None:
+        # Calculate the average load for each hour
+        hourly_averages = df.groupby("hour")["mean"].mean().to_dict()
+
+        # Update the daily load averages
+        self.daily_load_averages = {
+            hour: hourly_averages.get(hour, 0.0) for hour in range(24)
+        }
+
+        # Log the daily load averages
+        # logger.debug("Daily load averages: %s", self.daily_load_averages)
+
+    async def _calculate_tou_parameters(self) -> None:
         """Calculate remaining battery life and grid boost SOC.
 
         Save and log any changes
@@ -361,13 +414,14 @@ class TOUScheduler:
 
         # Get the current usable battery power
         batt_wh_usable = self.inverter_api.batt_wh_usable or 0
-        # Get the minimum amount of battery power we want to keep in reserve
-        midnight_soc = self.data.data.get(
-            GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
+
+        # For each hour going forward, we need to calculate how long the battery will last until completely exhausted.
+        minutes = 0
+        boost_range = range(
+            int(self.grid_boost_start.split(":", maxsplit=1)[0]),
+            int(self.inverter_api.grid_boost_end.split(":", maxsplit=1)[0]),
         )
 
-        # For each hour going forward, we need to calculate how long the battery will last.
-        minutes = 0
         while batt_wh_usable and batt_wh_usable > 0:
             # Calculate battery life remaining
             hour_impact = int(
@@ -380,15 +434,8 @@ class TOUScheduler:
                 * (1 - self.shading.get(current_hour, 0.0))
             )
 
-            # Check if grid boost is needed
-            if (
-                current_hour
-                in range(
-                    int(self.grid_boost_start.split(":", maxsplit=1)[0]),
-                    int(self.inverter_api.grid_boost_end.split(":", maxsplit=1)[0]),
-                )
-                and self.grid_boost_on == ON
-            ):
+            # Check if we are inside the grid boost hours. If so, we can't go below the grid boost amount
+            if current_hour in boost_range and self.grid_boost_on == ON:
                 if (batt_wh_usable - hour_impact) < (
                     self.inverter_api.grid_boost_wh_min or 0
                 ):
@@ -405,8 +452,9 @@ class TOUScheduler:
             batt_wh_usable -= hour_impact
 
             logger.debug(
-                "Battery life remaining at %s is %s",
-                printable_hour(datetime.now(ZoneInfo(self.timezone)).hour),
+                "At %s battery energy was reduced by %s wH and now is %s wH.",
+                printable_hour(current_hour),
+                hour_impact,
                 batt_wh_usable,
             )
 
@@ -417,30 +465,45 @@ class TOUScheduler:
 
             self.batt_minutes_remaining = minutes
 
-            # Calculate SOC required for grid boost
-            if minutes > (24 - now.hour) * 60:
-                self.grid_boost_starting_soc = int(midnight_soc)
-                return
+        # DONE WITH CALCULATING BATTERY LIFE IN MINUTES
+        # Calculate SOC required for grid boost
+        # Initialize variables
+        self.grid_boost_starting_soc = DEFAULT_GRID_BOOST_STARTING_SOC
+        current_soc = 0
+        current_hour = now.hour
 
-            # Calculate additional SOC needed to reach midnight
-            additional_soc = 0
-            if current_hour > 0:
-                for hour in range(current_hour - 1, 23):
-                    additional_soc += ceil(
-                        self.daily_load_averages[hour]
-                        * 1
-                        / (self.inverter_api.efficiency or 1)
-                        / (self.inverter_api.batt_wh_per_percent or 1)
-                    )
-                    current_hour = (current_hour + 1) % 24
+        # Calculate additional SOC needed to reach midnight
+        if current_hour > 0:
+            for hour in range(current_hour - 1, 23):
+                current_soc += ceil(
+                    self.daily_load_averages[hour]
+                    * 1
+                    / (self.inverter_api.efficiency or 1)
+                    / (self.inverter_api.batt_wh_per_percent or 1)
+                )
+                current_hour = (current_hour + 1) % 24
+        # Add SOC for last hour of day
+        current_soc += ceil(
+            self.daily_load_averages[23]
+            * 1
+            / (self.inverter_api.efficiency or 1)
+            / (self.inverter_api.batt_wh_per_percent or 1)
+        )
+        # Add SOC reserved desired at midnight
+        current_soc += self.data.data.get(
+            GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
+        )
 
-            # Add SOC for last hour of day
-            additional_soc += ceil(
-                self.daily_load_averages[23]
-                * 1
-                / (self.inverter_api.efficiency or 1)
-                / (self.inverter_api.batt_wh_per_percent or 1)
-            )
+        # Make sure we start with the minimum morning SoC
+        self.grid_boost_starting_soc = max(DEFAULT_GRID_BOOST_STARTING_SOC, current_soc)
+
+        # Log the grid boost SOC
+        logger.info(
+            "Grid boost SoC required to still have %s%% at midnight is %s%%, but setting to %s%%.",
+            self.inverter_api.grid_boost_midnight_soc,
+            current_soc,
+            self.grid_boost_starting_soc,
+        )
 
     async def _request_ha_statistics(
         self, entity_ids: set[str], days: int
@@ -466,9 +529,10 @@ class TOUScheduler:
 
         # Log the request
         logger.debug(
-            "Yesterday started at:%s, and ended at:%s.",
-            start_time_utc.strftime("%A, %H:%M"),
-            end_time_utc.strftime("%A, %H:%M"),
+            "Statistics for %s gathered from %s until %s.",
+            entity_ids,
+            start_time_utc.strftime("%a at %-I %p"),
+            end_time_utc.strftime("%a at %-I %p"),
         )
 
         return await get_instance(self.hass).async_add_executor_job(

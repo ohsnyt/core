@@ -238,22 +238,24 @@ class ShadingEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, str]:
         """Return the hourly shade values as dict[str,str]."""
-        return {
-            f"{hour % 12 or 12} {'am' if hour < 12 else 'pm'}": f"{round(float(value) * 100)}%"
-            for hour, value in self._hours.items()
+        hours = ast.literal_eval(self.coordinator.data.get("shading", "{}"))
+        attributes = {
+            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12:2} {'am' if hour < 12 else 'pm'}": f"{value * 100:.1f}%"
+            for hour, value in hours.items()
         }
+        if not attributes:
+            return {"No shading found": ""}
+        return attributes
 
     @property
     def state(self) -> str:
         """Return the average shading for the day."""
-        self._hours = ast.literal_eval(self.coordinator.data.get("shading", {}))
-        shade = ""
-        for hour, value in self._hours.items():
-            if value != 0:
-                shade += f"{round(float(value) * 100)}% at {hour % 12 or 12} {'am' if hour < 12 else 'pm'}, "
-        if sum(map(float, self._hours.values())) > 0:
-            return shade[:-2]  # remove the trailing comma and space
-        return "No shading found"
+        hours = ast.literal_eval(self.coordinator.data.get("shading", {}))
+        return (
+            f"{sum(map(float, hours.values())) / len(hours) * 100:.1f}%"
+            if hours
+            else "0%"
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -328,6 +330,67 @@ class CloudEntity(CoordinatorEntity):
         """Return the status of the sensor."""
         status = self.coordinator.data.get("cloud_status", "Unknown")
         return status if isinstance(status, str) else "Unknown"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device info."""
+        return self._device_info
+
+    @property
+    def unique_id(self) -> str | None:
+        """Return a unique ID."""
+        return self._attr_unique_id
+
+
+class LoadEntity(CoordinatorEntity):
+    """Representation of the average daily load.
+
+    This sensor is used to display the average daily load for each hour of the day if available.
+    """
+
+    def __init__(
+        self, entry_id: str, coordinator: DataUpdateCoordinator[dict[str, Any]]
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._name = "Daily_Average_Load"
+        self._attr_native_unit_of_measurement = "%"
+        self._attr_icon = "mdi:power-socket-us"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._hours: dict[int, float] = {}
+
+        # Set the unique_id and name of the sensor
+        self._attr_unique_id = (
+            f"{coordinator.data.get('plant_id', '??????')}_Average_daily_load"
+        )
+        self._attr_name = "Daily average load"
+        self._device_info: DeviceInfo = {
+            "identifiers": {(DOMAIN, entry_id)},
+            "name": self._name,
+            "manufacturer": "OhSnyt",
+        }
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        """Return the hourly load values as dict[str,str]."""
+        hours = ast.literal_eval(self.coordinator.data.get("load", "{}"))
+        attributes = {
+            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12} {'am' if hour < 12 else 'pm'}": f"{value:.1f} kWh"
+            for hour, value in hours.items()
+        }
+        if not attributes:
+            return {"No load averages available": ""}
+        return attributes
+
+    @property
+    def state(self) -> str:
+        """Return the average load for the day."""
+        hours = ast.literal_eval(self.coordinator.data.get("load", {}))
+        return (
+            f"{sum(map(float, hours.values())) / len(hours) / 1000:.1f} kWh"
+            if hours
+            else "unknown"
+        )
 
     @property
     def device_info(self) -> DeviceInfo:

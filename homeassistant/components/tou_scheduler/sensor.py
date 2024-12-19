@@ -22,6 +22,7 @@ from .entity import (
     BatteryEntity,
     CloudEntity,
     InverterEntity,
+    LoadEntity,
     PlantEntity,
     ShadingEntity,
     TOUSchedulerEntity,
@@ -52,13 +53,14 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "sun": OhSnytSensorEntityDescription(
-        key="sun",
-        translation_key="sun",
+    "sun_ratio": OhSnytSensorEntityDescription(
+        key="sun_ratio",
+        translation_key="sun_ratio",
         has_entity_name=True,
-        name="sun",
-        icon="mdi:sun-thermometer",
-        # This is a string, "full", "partial", or "dark"
+        name="Ratio of full sun",
+        icon="mdi:percent-outline",
+        suggested_display_precision=2,
+        state_class=SensorStateClass.MEASUREMENT,
     ),
     "power_pv": OhSnytSensorEntityDescription(
         key="power_pv",
@@ -131,6 +133,18 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    "grid_boost_soc": OhSnytSensorEntityDescription(
+        key="grid_boost_soc",
+        translation_key="grid_boost_soc",
+        has_entity_name=True,
+        name="Grid Boost SoC",
+        icon="mdi:battery",
+        native_unit_of_measurement="%",
+        suggested_unit_of_measurement="%",
+        suggested_display_precision=0,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
 }
 
 
@@ -156,6 +170,7 @@ async def async_setup_entry(
             PlantEntity("ToU_Plant", coordinator=coordinator),
             InverterEntity("ToU_Inverter", coordinator=coordinator),
             ShadingEntity("ToU_Shading", coordinator=coordinator),
+            LoadEntity("ToU_Load", coordinator=coordinator),
         ]
     )
     # Add the "normal" Sol-Ark sensors for the inverter
