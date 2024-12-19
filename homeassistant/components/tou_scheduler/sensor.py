@@ -209,8 +209,10 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         self._attr_name = f"{entity_description.name}"
         self.entity_description = entity_description
         # And then set the key and sensor unique_id
-        self._key = entity_description.key
-        self._attr_unique_id = f"{entry_id}_{entity_description.key}"
+        self._key = entry_id
+        self._attr_unique_id = (
+            f"{coordinator.data.get('plant_id', '??????')}_{entry_id}"
+        )
         # self._device_info = entity_description
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
@@ -222,6 +224,12 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
     def name(self) -> str | None:
         """Return the name of the sensor."""
         return self._attr_name
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID."""
+        # This should always return a value - but error checking won't pass without this or statement.
+        return self._attr_unique_id or "bogus_sensor_id"
 
     # @property
     # def state(self) -> str | int | float | None:
