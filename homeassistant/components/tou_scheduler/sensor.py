@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -189,9 +190,6 @@ async def async_setup_entry(
 class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
     """Representation of a Solark Cloud sensor."""
 
-    entity_description: OhSnytSensorEntityDescription
-    _attr_has_entity_name = True
-
     def __init__(
         self,
         *,
@@ -202,35 +200,42 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         """Initialize the sensor."""
         super().__init__(coordinator)
         # Set the icon
-        self._attr_icon = (
-            entity_description.icon if entity_description.icon else "mdi:flash"
-        )
+        self._attr_icon = entity_description.icon or "mdi:flash"
         # Set the name and description
-        self._attr_name = f"{entity_description.name}"
+        self._attr_name = str(entity_description.name or "default_name")
         self.entity_description = entity_description
         # And then set the key and sensor unique_id
         self._key = entity_description.key
-        self._attr_unique_id = f"{entry_id}_{entity_description.key}"
+        self._attr_unique_id = f"{entry_id}_{entity_description.key or 'default_key'}"
         # self._device_info = entity_description
-        self._device_info: DeviceInfo = {
-            "identifiers": {(DOMAIN, entry_id)},
-            "name": self.name,
-            "manufacturer": "Sol-Ark",
-        }
+        self._device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry_id)},
+            name=self.name,
+            manufacturer="Sol-Ark",
+        )
+        # Set the entity ID with the "tou" prefix
+        if coordinator.hass is not None:
+            self.entity_id = generate_entity_id(
+                "tou.{}", entity_description.key, hass=coordinator.hass
+            )
+        else:
+            logger.error("Coordinator hass is None, cannot generate entity ID")
+            self.entity_id = None
 
     @property
     def name(self) -> str | None:
         """Return the name of the sensor."""
         return self._attr_name
 
-    # @property
-    # def state(self) -> str | int | float | None:
-    #     """Return the state of the sensor."""
-    #     return self.coordinator.data[self._key]
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID."""
+        return self._attr_unique_id or "default_unique_id"
+
     @property
     def native_value(self) -> StateType | None | str | int | float:
         """Return the state of the sensor."""
         value = self.coordinator.data.get(self._key)
         if value is None:
-            logger.error("No data found for key: %s", self._key)
+            logger.warning("No data found for key: %s", self._key)
         return value

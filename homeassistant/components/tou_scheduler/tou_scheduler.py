@@ -21,6 +21,7 @@ from .const import (
     DEFAULT_GRID_BOOST_ON,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
+    DEFAULT_INVERTER_EFFICIENCY,
     DEFAULT_SOLCAST_UPDATE_HOURS,
     GRID_BOOST_HISTORY,
     GRID_BOOST_MIDNIGHT_SOC,
@@ -94,7 +95,7 @@ class TOUScheduler:
             logger.error("Inverter API or timezone is not set")
             return {}
 
-        # Get the current hour
+        # Get the current hour for solcast data lookups
         now = datetime.now(ZoneInfo(self.timezone))
         current_hour = f"{now.date()}-{now.hour}"
 
@@ -246,15 +247,17 @@ class TOUScheduler:
 
         # Get the past day of pv estimate, actual pv, sun, and battery state of charge data
         load_entity_ids = {
-            "sensor.tou_estimated_pv_power",
-            "sensor.tou_sun_ratio",
+            "sensor.tou_estimated_pv_power_2",
+            "sensor.ratio_of_full_sun_3",
             "sensor.tou_power_pv",
-            "sensor.tou_batt_soc",
+            "sensor.battery_state_of_charge_3",
         }
         history_data = await self._request_ha_statistics(load_entity_ids, 1)
 
         # Log the history_data to see its structure
+        # logger.debug("________________________________________________________")
         # logger.debug("Multi-id History data: %s", history_data)
+        # logger.debug("________________________________________________________")
 
         # Convert history_data to a dictionary for efficient lookups
         history_data_dict = dict(history_data.items())
@@ -288,6 +291,43 @@ class TOUScheduler:
             )
             for hour in range(24)
         }
+        battery_socs2 = {
+            hour: next(
+                (
+                    item["mean"]
+                    for item in history_data_dict.get("sensor.tou_batt_soc_2", [])
+                    if datetime.fromtimestamp(
+                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
+                    ).hour
+                    == hour
+                ),
+                0.0,
+            )
+            for hour in range(24)
+        }
+        battery_socs3 = {
+            hour: next(
+                (
+                    item["mean"]
+                    for item in history_data_dict.get("sensor.tou_batt_soc_3", [])
+                    if datetime.fromtimestamp(
+                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
+                    ).hour
+                    == hour
+                ),
+                0.0,
+            )
+            for hour in range(24)
+        }
+        logger.debug("________________________________________________________")
+        logger.debug(
+            "Battery SoCs: 1) %s, 2) %s, 3) %s",
+            battery_socs,
+            battery_socs2,
+            battery_socs3,
+        )
+        logger.debug("________________________________________________________")
+
         pv_powers = {
             hour: next(
                 (
@@ -405,8 +445,6 @@ class TOUScheduler:
             )
             return
 
-        logger.debug("Calculating remaining battery time")
-
         # Get the current hour
         now = datetime.now(ZoneInfo(self.inverter_api.timezone))
         current_day = now.date()
@@ -422,11 +460,14 @@ class TOUScheduler:
             int(self.inverter_api.grid_boost_end.split(":", maxsplit=1)[0]),
         )
 
+        # Log for debugging
+        logger.debug("Calculating remaining battery time")
+
         while batt_wh_usable and batt_wh_usable > 0:
             # Calculate battery life remaining
             hour_impact = int(
                 self.daily_load_averages.get(current_hour, 0)
-                * (1 / (self.inverter_api.efficiency or 1))
+                * ((self.inverter_api.efficiency or DEFAULT_INVERTER_EFFICIENCY) / 100)
             )
             key = f"{current_day}-{current_hour}"
             hour_impact += int(
@@ -443,13 +484,9 @@ class TOUScheduler:
                         batt_wh_usable - hour_impact
                     )
 
-            # Update battery life calculations
-            minutes += int(
-                (max(1, (batt_wh_usable / (hour_impact or 1))) * 60)
-                if hour_impact > 0
-                else 60
-            )
-            batt_wh_usable -= hour_impact
+            # Update battery life calculations.
+            minutes += int(min(1, (batt_wh_usable / (hour_impact or 1))) * 60)
+            batt_wh_usable = max(0, batt_wh_usable - hour_impact)
 
             logger.debug(
                 "At %s battery energy was reduced by %s wH and now is %s wH.",
@@ -463,7 +500,8 @@ class TOUScheduler:
             if current_hour == 0:
                 current_day = current_day + timedelta(days=1)
 
-            self.batt_minutes_remaining = minutes
+        self.batt_minutes_remaining = minutes
+        logger.debug("Battery life remaining is %s hours.", round(minutes / 60, 1))
 
         # DONE WITH CALCULATING BATTERY LIFE IN MINUTES
         # Calculate SOC required for grid boost

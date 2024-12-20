@@ -6,6 +6,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorStateClass
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -29,19 +30,28 @@ class TOUSchedulerEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
+        self._name = "tou_scheduler"
+        self._key = "tou_scheduler"
 
         # Set the icon
         self._attr_icon = "mdi:toggle-switch"
         # Set the unique_id of the sensor
         self._attr_unique_id = (
-            f"{coordinator.data.get('plant_id', '??????')}_Inverter_ToU_settings"
+            f"{coordinator.data.get('plant_id', '??????')}_tou_scheduler"
         )
-        self._attr_name = f"{coordinator.data.get('plant_name', 'My plant')} ToU system"
+        self._attr_name = (
+            f"{coordinator.data.get('plant_name', 'My plant')} ToU scheduler"
+        )
         self._device_info: DeviceInfo = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": self.name,
             "manufacturer": "Sol-Ark",
         }
+        # Set the entity ID with the "tou" prefix
+        plant_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")}"
+        self.entity_id = generate_entity_id(
+            "tou.{}", f"{plant_name}_scheduler", hass=coordinator.hass
+        )
 
     @property
     def name(self) -> str | None:
@@ -76,6 +86,8 @@ class BatteryEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
+        self._name = "battery"
+        self._key = "battery"
 
         # Set the icon
         self._attr_icon = "mdi:clock-time-eleven-outline"
@@ -89,6 +101,11 @@ class BatteryEntity(CoordinatorEntity):
             "name": self.name,
             "manufacturer": "EG4",
         }
+        # Set the entity ID with the "tou" prefix
+        plant_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")}"
+        self.entity_id = generate_entity_id(
+            "tou.{}", f"{plant_name}_battery", hass=coordinator.hass
+        )
 
     @property
     def name(self) -> str | None:
@@ -122,6 +139,8 @@ class PlantEntity(CoordinatorEntity):
 
         # Set the icon
         self._attr_icon = "mdi:solar-power"
+        self._name = "plant"
+        self._key = "plant"
 
         self._attr_unique_id = f"{coordinator.data.get('plant_id', '??????')}"
         self._attr_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")} plant"
@@ -135,6 +154,11 @@ class PlantEntity(CoordinatorEntity):
                 "plant_created", "Plant created time not available"
             ),
         }
+        # Set the entity ID with the "tou" prefix
+        plant_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")}"
+        self.entity_id = generate_entity_id(
+            "tou.{}", f"{plant_name}_plant", hass=coordinator.hass
+        )
 
     @property
     def name(self) -> str | None:
@@ -167,6 +191,8 @@ class InverterEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
+        self._name = "inverter"
+        self._key = "inverter"
 
         # Set the icon
         self._attr_icon = "mdi:application-cog"
@@ -188,6 +214,11 @@ class InverterEntity(CoordinatorEntity):
             "manufacturer": "Sol-Ark",
             "model": self.coordinator.data.get("inverter_model", "Unknown Model"),
         }
+        # Set the entity ID with the "tou" prefix
+        plant_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")}"
+        self.entity_id = generate_entity_id(
+            "tou.{}", f"{plant_name}_inverter", hass=coordinator.hass
+        )
 
     @property
     def name(self) -> str | None:
@@ -220,7 +251,8 @@ class ShadingEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._name = "Shading"
+        self._name = "shading"
+        self._key = "shading"
         self._attr_native_unit_of_measurement = "%"
         self._attr_icon = "mdi:weather-sunny"
         self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -234,6 +266,11 @@ class ShadingEntity(CoordinatorEntity):
             "name": self._name,
             "manufacturer": "OhSnyt",
         }
+        # Set the entity ID with the "tou" prefix
+        plant_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")}"
+        self.entity_id = generate_entity_id(
+            "tou.{}", f"{plant_name}_avg_load", hass=coordinator.hass
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
@@ -288,12 +325,14 @@ class CloudEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
+        self._name = "solark_cloud"
+        self._key = "solark_cloud"
 
-        # Set the icon
         self._attr_icon = "mdi:cloud"
+
         # Set the unique_id of the sensor
         self._attr_unique_id = (
-            f"{coordinator.data.get('plant_id', '??????')}_Solark_Cloud"
+            f"{coordinator.data.get('plant_id', '??????')}_solark_sloud"
         )
         self._attr_name = self.coordinator.data.get("cloud_name", "Sol-Ark Cloud")
         self._device_info: DeviceInfo = {
@@ -301,6 +340,11 @@ class CloudEntity(CoordinatorEntity):
             "name": self.name,
             "manufacturer": "Sol-Ark",
         }
+        # Set the entity ID with the "tou" prefix
+        plant_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")}"
+        self.entity_id = generate_entity_id(
+            "tou.{}", f"{plant_name}_solark_cloud", hass=coordinator.hass
+        )
 
     @property
     def attributes(self) -> dict[str, Any]:
@@ -353,7 +397,8 @@ class LoadEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._name = "Daily_Average_Load"
+        self._name = "daily_average_load"
+        self._key = "daily_average_load"
         self._attr_native_unit_of_measurement = "%"
         self._attr_icon = "mdi:power-socket-us"
         self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -361,7 +406,7 @@ class LoadEntity(CoordinatorEntity):
 
         # Set the unique_id and name of the sensor
         self._attr_unique_id = (
-            f"{coordinator.data.get('plant_id', '??????')}_Average_daily_load"
+            f"{coordinator.data.get('plant_id', '??????')}_daily_average_load"
         )
         self._attr_name = "Daily average load"
         self._device_info: DeviceInfo = {
@@ -369,6 +414,11 @@ class LoadEntity(CoordinatorEntity):
             "name": self._name,
             "manufacturer": "OhSnyt",
         }
+        # Set the entity ID with the "tou" prefix
+        plant_name = f"{self.coordinator.data.get("plant_name", "Sol-Ark")}"
+        self.entity_id = generate_entity_id(
+            "tou.{}", f"{plant_name}_avg_load", hass=coordinator.hass
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:

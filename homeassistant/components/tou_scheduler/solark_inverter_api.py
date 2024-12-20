@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from enum import Enum
 import json
@@ -25,7 +27,6 @@ from .const import (
     DEFAULT_GRID_BOOST_ON,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
-    DEFAULT_INVERTER_EFFICIENCY,
     OFF,
     TIMEOUT,
 )
@@ -117,6 +118,10 @@ class InverterAPI:
         # self.batt_soc: float = 0.0
         self._batt_wh_max_est: float = 0.0
 
+        # Items used to calculate the total efficiency once a month
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.schedule_efficiency_calculation()
+
     @property
     def username(self) -> str | None:
         """Return the username."""
@@ -164,6 +169,17 @@ class InverterAPI:
         self.urls["write_settings"] = (
             CLOUD_URL + f"/api/v1/common/setting/{self.inverter_serial_number}/set"
         )
+        prefix = CLOUD_URL + "/api/v1/inverter/"
+        self.urls["battery"] = (
+            prefix
+            + f"battery/{self.inverter_serial_number}/realtime?sn={self.inverter_serial_number}&lan=en"
+        )
+        self.urls["pv"] = prefix + f"{self.inverter_serial_number}/realtime/input"
+        self.urls["grid"] = (
+            prefix
+            + f"grid/{self.inverter_serial_number}/realtime?sn={self.inverter_serial_number}&lan=en"
+        )
+        self.urls["load"] = prefix + f"load/{self.inverter_serial_number}/realtime"
 
     async def test_authenticate(self) -> str | None:
         """Authenticate to the Sol-Ark cloud for config_flow. Return list of plants or None."""
@@ -248,6 +264,9 @@ class InverterAPI:
 
         # Authentication was successful
         self.cloud_status = Cloud_Status.ONLINE
+
+        # Start a background task to get the efficienty of the system
+
         return True
 
     async def get_plant(self) -> bool:
@@ -266,15 +285,18 @@ class InverterAPI:
         if infos:
             self.plant_name = infos[0].get("name", None)
             self.plant_id = infos[0].get("id", None)
-            self.efficiency = infos[0].get("efficiency", DEFAULT_INVERTER_EFFICIENCY)
+            # self.efficiency = infos[0].get("efficiency", DEFAULT_INVERTER_EFFICIENCY)
             self.plant_address = infos[0].get("address", None)
             self.plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
 
         # With the plant info, go get the plant inverter serial number
-        return await self.get_inverter_sn()
+        await self.get_inverter_sn()
+        # Calculate the total efficiency
+        await self._calculate_total_efficiency()
+        return True
 
     async def get_inverter_sn(self) -> bool:
-        """Get the inverter SN and build API endpoints. Done once when first updating sensor data."""
+        """Get the inverter SN and build API endpoints. Done once at the end of get_plant."""
 
         data = await self._request("GET", self.urls["inverter_list"], body={})
         # If we don't have any details, we can't continue. Log an error and force reauthentication.
@@ -338,6 +360,65 @@ class InverterAPI:
         self.data_updated = datetime.now(ZoneInfo(self.timezone)).strftime(
             "%a %I:%M %p"
         )
+
+    def schedule_efficiency_calculation(self):
+        """Schedule the efficiency calculation to run once a month."""
+        loop = asyncio.get_running_loop()
+        now = datetime.now()
+        # Schedule the task to run on the first day of the next month
+        next_month = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+        delay = (next_month - now).total_seconds()
+        loop.call_later(
+            delay, lambda: asyncio.create_task(self._run_efficiency_calculation())
+        )
+
+    async def _run_efficiency_calculation(self):
+        await asyncio.to_thread(self._calculate_total_efficiency)
+        # Reschedule the task to run again next month
+        self.schedule_efficiency_calculation()
+
+    async def _calculate_total_efficiency(self) -> None:
+        """Calculate the long term (total) power efficiency."""
+
+        # Get totals for battery, PV, Grid, and Load
+        logger.debug("Getting battery totals")
+        data = await self._request("GET", self.urls["battery"], body={})
+        if data is None:
+            logger.error("Unable to update battery information")
+            return
+        total_batt_charge = float(data.get("etotalChg", 0))
+        total_batt_discharge = float(data.get("etotalDischg", 0))
+        self._batt_wh_max_est = int(float(data.get("capacity", 0)) * 48)
+
+        logger.debug("Getting PV totals")
+        data = await self._request("GET", self.urls["pv"], body={})
+        if data is None:
+            logger.error("Unable to update PV information")
+            return
+        total_pv = float(data.get("etotal", 0.0))
+
+        logger.debug("Getting grid totals")
+        data = await self._request("GET", self.urls["grid"], body={})
+        if data is None:
+            logger.error("Unable to update grid information")
+            return
+        total_grid_import_buy = float(data.get("etotalFrom", 0))
+
+        logger.debug("Getting load totals")
+        data = await self._request("GET", self.urls["load"], body={})
+        if data is None:
+            logger.error("Unable to update load information")
+            return
+        total_load = float(data.get("totalUsed", 0.0))
+
+        total_source = (
+            total_pv + total_grid_import_buy + total_batt_discharge - total_batt_charge
+        )
+        # Prevent divide by zero. Only set the total efficiency if we have a valid source
+        if (total_source) > 0:
+            efficiency = round(100 * (total_load / total_source), 1)
+        logger.info("Total power efficiency is %s", efficiency)
+        self.efficiency = efficiency
 
     async def _read_settings(self) -> dict[str, Any]:
         """Read the inverter settings and set self values."""
