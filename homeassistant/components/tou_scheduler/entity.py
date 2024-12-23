@@ -86,9 +86,7 @@ class TOUSchedulerEntity(CoordinatorEntity):
     @property
     def state(self) -> str:
         """Return the state of the sensor."""
-        if self.coordinator.data.get("plant_status") == "Active":
-            return "Active"
-        return self.coordinator.data.get("plant_status", "Plant status n/a")
+        return self.coordinator.data.get("status", "State unknown")
 
 
 class ShadingEntity(CoordinatorEntity):
@@ -140,7 +138,7 @@ class ShadingEntity(CoordinatorEntity):
         """Return the hourly shade values as dict[str,str]."""
         hours = ast.literal_eval(self._coordinator.data.get("shading", "{}"))
         attributes = {
-            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12:2} {'am' if hour < 12 else 'pm'}": f"{value * 100:.1f}%"
+            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12:2} {'am' if hour < 12 else 'pm'}": f"{int(round(value,0))}%"
             for hour, value in hours.items()
         }
         if not attributes:
@@ -149,9 +147,14 @@ class ShadingEntity(CoordinatorEntity):
 
     @property
     def state(self) -> str | int | float | None:
-        """Return the state of the sensor."""
-        hours = ast.literal_eval(self._coordinator.data.get("load", "{}"))
-        return sum(hours.values())
+        """Return the count of hours with shading."""
+        shading_data = ast.literal_eval(self._coordinator.data.get("shading", "{}"))
+        count = sum(1 for value in shading_data.values() if value > 0)
+        if count == 1:
+            return "1 hour with shading"
+        if count > 0:
+            return f"{count} hours with shading"
+        return "No shading found"
 
 
 class LoadEntity(CoordinatorEntity):
@@ -201,7 +204,7 @@ class LoadEntity(CoordinatorEntity):
         """Return the hourly load values as dict[str,str]."""
         hours = ast.literal_eval(self._coordinator.data.get("load", "{}"))
         attributes = {
-            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12} {'am' if hour < 12 else 'pm'}": f"{value:.1f} kWh"
+            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12} {'am' if hour < 12 else 'pm'}": f"{int(round(value,0)):,} Wh"
             for hour, value in hours.items()
         }
         if not attributes:
@@ -212,4 +215,4 @@ class LoadEntity(CoordinatorEntity):
     def state(self) -> str | int | float | None:
         """Return the state of the sensor."""
         hours = ast.literal_eval(self._coordinator.data.get("load", "{}"))
-        return sum(hours.values())
+        return f"{round(sum(hours.values())/1000,1)} kWh"

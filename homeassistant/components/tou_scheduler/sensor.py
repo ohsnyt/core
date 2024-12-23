@@ -174,11 +174,12 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
             "sensor.{}", self._attr_unique_id, hass=coordinator.hass
         )
         logger.debug(
-            "++Created sensor: %s (%s). Native value is: %s %s",
-            self._attr_name,
-            self._attr_unique_id,
-            self.native_value,
+            "++Created sensor: %s. Native value is: %s %s.\n(entity_id: %s, _attr_unique_id: %s)",
+            self.name,
+            self.state,
             self._attr_native_unit_of_measurement,
+            self.entity_id,
+            self.unique_id,
         )
 
     @property
@@ -192,10 +193,11 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         return self._attr_unique_id
 
     @property
-    def native_value(self) -> str | int | float | None:
+    def native_value(self) -> int | float | None:
         """Return the state of the sensor."""
-        value = self.coordinator.data.get(self.entity_description.key)
+        value = round(self.coordinator.data.get(self.entity_description.key), 0)
         if not isinstance(value, (str, int, float, type(None))):
             logger.error("Invalid type for native_value: %s (%s)", value, type(value))
             return None
-        return value
+
+        return int(value) if value is not None else None
