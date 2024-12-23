@@ -9,8 +9,9 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfPower
+from homeassistant.const import UnitOfPower
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -30,7 +31,7 @@ class OhSnytSensorEntityDescription(SensorEntityDescription):
 
 
 TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
-    # Solcast related sensors.
+    # "Realtime" power flow related sensors.
     "power_pv_estimated": OhSnytSensorEntityDescription(
         key="power_pv_estimated",
         icon="mdi:flash",
@@ -39,32 +40,6 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # "sun_ratio": OhSnytSensorEntityDescription(
-    #     key="sun_ratio",
-    #     icon="mdi:percent-outline",
-    #     name="Ratio of full sun",
-    #     native_unit_of_measurement="%",
-    #     device_class=SensorDeviceClass.ILLUMINANCE,
-    #     state_class=SensorStateClass.MEASUREMENT,
-    # ),
-    # Battery related sensors.
-    "batt_soc": OhSnytSensorEntityDescription(
-        key="batt_soc",
-        icon="mdi:percent-outline",
-        name="Battery State of Charge",
-        native_unit_of_measurement="%",
-        device_class=SensorDeviceClass.BATTERY,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    "batt_wh_usable": OhSnytSensorEntityDescription(
-        key="batt_wh_usable",
-        icon="mdi:battery",
-        name="Usable battery energy",
-        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL,
-    ),
-    # Realtime power flow related sensors.
     "power_battery": OhSnytSensorEntityDescription(
         key="power_battery",
         icon="mdi:battery",
@@ -102,6 +77,15 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         key="grid_boost_soc",
         icon="mdi:battery",
         name="Grid Boost SoC",
+        native_unit_of_measurement="%",
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    # Battery related sensors.
+    "batt_soc": OhSnytSensorEntityDescription(
+        key="batt_soc",
+        icon="mdi:percent-outline",
+        name="Battery State of Charge",
         native_unit_of_measurement="%",
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
@@ -186,6 +170,9 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
             "name": self._attr_name,
             # via_device=(DOMAIN, parent) if parent else ("", ""),
         }
+        self.entity_id = generate_entity_id(
+            "sensor.{}", self._attr_unique_id, hass=coordinator.hass
+        )
         logger.debug(
             "++Created sensor: %s (%s). Native value is: %s %s",
             self._attr_name,

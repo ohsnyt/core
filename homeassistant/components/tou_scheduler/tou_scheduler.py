@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+import json
 import logging
 from math import ceil
 from zoneinfo import ZoneInfo
 
+import aiofiles
 import pandas as pd
 
 from homeassistant.components.recorder import get_instance, statistics
@@ -67,8 +69,13 @@ class TOUScheduler:
         self.pv_estimate: dict[str, float] = {}
 
         # Here is the shading info: default to 0.0 for each hour of the day and no last update date
-        self.shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
-        self.shading_updated: date | None = None
+        self.daily_shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
+        self._shading_startup: bool = True
+        self._current_hour: int = 0  # This is the current hour of the day, used to update shading once per hour
+        self._current_hour_pv: list[
+            float
+        ] = []  # This is the current hour's PV power, used to calculate average pv generation this hour
+        self._shading_file: str = "shading_data.json"
 
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
@@ -95,10 +102,6 @@ class TOUScheduler:
             logger.error("Inverter API or timezone is not set")
             return {}
 
-        # Get the current hour for solcast data lookups
-        now = datetime.now(ZoneInfo(self.timezone))
-        current_hour = f"{now.date()}-{now.hour}"
-
         return {
             "battery_minutes": self.batt_minutes_remaining,
             "grid_boost_soc": self.grid_boost_starting_soc,
@@ -116,6 +119,7 @@ class TOUScheduler:
             "power_grid": self.inverter_api.realtime_grid_power,
             "power_load": self.inverter_api.realtime_load_power,
             "power_pv": self.inverter_api.realtime_pv_power,
+            "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(),
             # Inverter info
             "inverter_model": self.inverter_api.inverter_model or "unknown",
             "inverter_status": str(self.inverter_api.inverter_status),
@@ -133,13 +137,8 @@ class TOUScheduler:
                 if self.inverter_api.bearer_token_expires_on
                 else "unknown"
             ),
-            # Solcast data
-            "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(
-                current_hour
-            ),
-            "sun_ratio": self.solcast_api.get_current_hour_sun_estimate(current_hour),
             # Shading data
-            "shading": str(self.shading),
+            "shading": str(self.daily_shading),
             "load": str(self.daily_load_averages),
         }
 
@@ -218,171 +217,70 @@ class TOUScheduler:
         return self.to_dict()
 
     async def _calculate_shading(self) -> None:
-        """Calculate the shading for the past day.
+        """Calculate the shading each hour.
 
-        We do this once a day after midnight.
-        The structure of the history_data is:
-        defaultdict(<class 'list'>, {
-            'sensor.tou_estimated_pv_power_2': [
-                {'start': 1734462000.0, 'end': 1734465600.0, 'mean': 0.0},
-                {'start': 1734465600.0, 'end': 1734469200.0, 'mean': 0.0}
-            ],
-            'sensor.tou_power_pv': [
-                {'start': 1734451200.0, 'end': 1734454800.0, 'mean': 996.4999999999999},
-                {'start': 1734454800.0, 'end': 1734458400.0, 'mean': 3661.353196273056}
-            ],
-            'sensor.tou_batt_soc': [
-                {'start': 1734454800.0, 'end': 1734458400.0, 'mean': 0.0},
-                {'start': 1734458400.0, 'end': 1734462000.0, 'mean': 24.58621105}
-            ],
-            'sensor.tou_sun_ratio': [
-                {'start': 1734454800.0, 'end': 1734458400.0, 'mean': 0.0},
-                {'start': 1734458400.0, 'end': 1734462000.0, 'mean': 1.0}
-            ]
-        })
+        We will store the shading for each hour of the day in a dictionary. We write this
+        to a file so we can load past shading if we restart Home Assistant.
+
+        Each update we record changes to actual PV power generated. We use this to compute an average PV power for the hour.
+        At the beginning of a new hour, we compute the past hour average PV power and compare it to the estimated PV power and
+        the estimated amount of sun. If the sun was full and the battery was charging we can adjust the shading and write
+        the adjusted shading info to a file, otherwise leave it alone.
+
+        We then reset the average PV power to the first value for this hour. and repeat the process for the next hour.
         """
-        # Skip if not at startup or already done today
-        if (
-            self.shading_updated is not None
-            and self.inverter_api is not None
-            and self.shading_updated
-            == datetime.now(ZoneInfo(self.inverter_api.timezone)).date()
-        ):
+
+        # We can't do this without SolCast data
+        if self.solcast_api is None:
             return
 
-        # Get the past day of pv estimate, actual pv, sun, and battery state of charge data
-        load_entity_ids = {
-            "sensor.tou_estimated_pv_power_2",
-            "sensor.ratio_of_full_sun_3",
-            "sensor.tou_power_pv",
-            "sensor.battery_state_of_charge_3",
-        }
-        history_data = await self._request_ha_statistics(load_entity_ids, 1)
+        # At startup, shading_update will be None. Go try to read the shading file.
+        if self._shading_startup:
+            try:
+                async with aiofiles.open(self._shading_file, encoding="utf-8") as file:
+                    file_content = await file.read()
+                    shading = json.loads(file_content)
+                    if not shading:
+                        logger.info("No shading data available in the file at startup.")
+                    else:
+                        self.daily_shading = shading
+                        logger.info("Shading file read at startup.")
+            except FileNotFoundError:
+                logger.warning("Shading file not found at startup.")
+            except json.JSONDecodeError:
+                logger.error("Error decoding shading file at startup.")
+            # Set the current hour to the current hour of the day and show we have done the startup
+            self._current_hour = datetime.now().hour
+            self._shading_startup = False
+        # If we are not at the start of a new hour, just record the current PV power generation
+        if self._current_hour == datetime.now().hour:
+            self._current_hour_pv.append(self.inverter_api.realtime_pv_power)
+            return
 
-        # Log the history_data to see its structure
-        # logger.debug("________________________________________________________")
-        # logger.debug("Multi-id History data: %s", history_data)
-        # logger.debug("________________________________________________________")
-
-        # Convert history_data to a dictionary for efficient lookups
-        history_data_dict = dict(history_data.items())
-
-        # Precompute the values for each hour
-        sun_ratios = {
-            hour: next(
-                (
-                    item["mean"]
-                    for item in history_data_dict.get("sensor.tou_sun_ratio", [])
-                    if datetime.fromtimestamp(
-                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
-                    ).hour
-                    == hour
-                ),
-                0.0,
-            )
-            for hour in range(24)
-        }
-        battery_socs = {
-            hour: next(
-                (
-                    item["mean"]
-                    for item in history_data_dict.get("sensor.tou_batt_soc", [])
-                    if datetime.fromtimestamp(
-                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
-                    ).hour
-                    == hour
-                ),
-                0.0,
-            )
-            for hour in range(24)
-        }
-        battery_socs2 = {
-            hour: next(
-                (
-                    item["mean"]
-                    for item in history_data_dict.get("sensor.tou_batt_soc_2", [])
-                    if datetime.fromtimestamp(
-                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
-                    ).hour
-                    == hour
-                ),
-                0.0,
-            )
-            for hour in range(24)
-        }
-        battery_socs3 = {
-            hour: next(
-                (
-                    item["mean"]
-                    for item in history_data_dict.get("sensor.tou_batt_soc_3", [])
-                    if datetime.fromtimestamp(
-                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
-                    ).hour
-                    == hour
-                ),
-                0.0,
-            )
-            for hour in range(24)
-        }
-        logger.debug("________________________________________________________")
-        logger.debug(
-            "Battery SoCs: 1) %s, 2) %s, 3) %s",
-            battery_socs,
-            battery_socs2,
-            battery_socs3,
-        )
-        logger.debug("________________________________________________________")
-
-        pv_powers = {
-            hour: next(
-                (
-                    item["mean"]
-                    for item in history_data_dict.get("sensor.tou_power_pv", [])
-                    if datetime.fromtimestamp(
-                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
-                    ).hour
-                    == hour
-                ),
-                0.0,
-            )
-            for hour in range(24)
-        }
-        pv_estimates = {
-            hour: next(
-                (
-                    item["mean"]
-                    for item in history_data_dict.get("sensor.tou_power_pv", [])
-                    if datetime.fromtimestamp(
-                        item["start"], tz=ZoneInfo(self.inverter_api.timezone)
-                    ).hour
-                    == hour
-                ),
-                0.0,
-            )
-            for hour in range(24)
-        }
-
-        # If the sun was full and the battery was charging we can adjust the shading, otherwise leave it alone
-        for hour in range(24):
-            sun_ratio = sun_ratios[hour]
-            battery_soc = battery_socs[hour]
-            pv_power = pv_powers[hour]
-            estimated_pv = pv_estimates[hour]
-
-            if sun_ratio > 0.95 and battery_soc < 96:
-                shading = (
-                    1.0 - min(pv_power / estimated_pv, 1.0) if estimated_pv > 0 else 1.0
+        # We are at the start of a new hour. If we have data in the list, calculate the average PV power for the past hour, updating as needed
+        if self._current_hour_pv:
+            pv_average = sum(self._current_hour_pv) / len(self._current_hour_pv)
+            # Reset the current hour PV power list
+            self._current_hour_pv = [self.inverter_api.realtime_pv_power]
+            # Update shading if we had a positive average PV power, battery soc is low enough to allow charging, and the sun was full
+            if (
+                pv_average > 0
+                and self.solcast_api.get_current_hour_pv_estimate() > 0
+                and self.inverter_api.realtime_battery_soc < 96
+                and self.solcast_api.get_current_hour_sun_estimate() > 0.95
+            ):
+                shading = 1 - min(
+                    pv_average / self.solcast_api.get_current_hour_pv_estimate(), 1
                 )
-                log_message = (
-                    "remained at" if self.shading.get(hour) == shading else "changed to"
-                )
+                self.daily_shading[datetime.now().hour] = shading
                 logger.info(
-                    "Shading for %s %s %s",
-                    printable_hour(hour),
-                    log_message,
-                    shading,
+                    "Shading for %s changed to %s", datetime.now().hour, shading
                 )
-                self.shading[hour] = shading
+                # Write the shading to a file
+                async with aiofiles.open(
+                    self._shading_file, "w", encoding="utf-8"
+                ) as file:
+                    await file.write(json.dumps(self.daily_shading))
 
     async def _calculate_load_estimates(self) -> None:
         """Calculate the daily load averages."""
@@ -402,7 +300,8 @@ class TOUScheduler:
         days_of_load_history = self.data.data.get(
             GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY
         )
-        load_entity_ids = {"sensor.power_load"}
+        sensor = f"sensor.{self.inverter_api.plant_id}_power_to_load"
+        load_entity_ids = {sensor}
         history_data = await self._request_ha_statistics(
             load_entity_ids, days_of_load_history
         )
@@ -439,6 +338,10 @@ class TOUScheduler:
         self.daily_load_averages = {
             hour: hourly_averages.get(hour, 1000.0) for hour in range(24)
         }
+
+        self.load_estimates_updated = datetime.now(
+            ZoneInfo(self.inverter_api.timezone)
+        ).date()
 
         # Log the results (optional)
         # logger.debug("Daily load averages: %s", self.daily_load_averages)
@@ -483,7 +386,7 @@ class TOUScheduler:
             key = f"{current_day}-{current_hour}"
             hour_impact += int(
                 self.pv_estimate.get(key, 0.0)
-                * (1 - self.shading.get(current_hour, 0.0))
+                * (1 - self.daily_shading.get(current_hour, 0.0))
             )
 
             # Check if we are inside the grid boost hours. If so, we can't go below the grid boost amount

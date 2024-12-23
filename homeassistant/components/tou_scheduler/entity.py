@@ -140,6 +140,12 @@ class ShadingEntity(CoordinatorEntity):
             return {"No shading found": ""}
         return attributes
 
+    @property
+    def state(self) -> str | int | float | None:
+        """Return the state of the sensor."""
+        hours = ast.literal_eval(self._coordinator.data.get("load", "{}"))
+        return sum(hours.values())
+
 
 class LoadEntity(CoordinatorEntity):
     """Representation of the average daily load.
@@ -194,3 +200,9 @@ class LoadEntity(CoordinatorEntity):
         if not attributes:
             return {"No load averages available": ""}
         return attributes
+
+    @property
+    def state(self) -> str | int | float | None:
+        """Return the state of the sensor."""
+        hours = ast.literal_eval(self._coordinator.data.get("load", "{}"))
+        return sum(hours.values())

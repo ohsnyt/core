@@ -58,7 +58,7 @@ class SolcastAPI:
         self.timezone: str = "America/Chicago"
         self.status = SolcastStatus.UNKNOWN
         self.data_updated: datetime | None = None
-        # forecast is a dictionary of hourly estimates with the date/hour as the key and the value as a tuple of float and bool.
+        # forecast is a dictionary of kWh hourly estimates with the date/hour as the key and the value as a tuple of float and bool.
         self.forecast: dict[str, tuple[float, float]] = {}
         self.energy_production_tomorrow = 0.0
         self.percentile = DEFAULT_SOLCAST_PERCENTILE
@@ -98,18 +98,20 @@ class SolcastAPI:
         """Set the hours to update Solcast data."""
         self._update_hours = value
 
-    def get_current_hour_pv_estimate(self, current_hour: str) -> float:
+    def get_current_hour_pv_estimate(self) -> float:
         """Get the estimate for the current hour PV."""
+        current_hour = datetime.now(ZoneInfo(self.timezone)).strftime("%Y-%m-%d-%H")
         # Return the current hour estimate
         logger.debug(
             "PV estimate for %s is %s",
             current_hour,
-            self.forecast.get(current_hour, (0.0, 0.0))[0],
+            round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0),
         )
-        return self.forecast.get(current_hour, (0.0, 0.0))[0]
+        return round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0)
 
-    def get_current_hour_sun_estimate(self, current_hour: str) -> float:
+    def get_current_hour_sun_estimate(self) -> float:
         """Get the sun status for the current hour."""
+        current_hour = datetime.now(ZoneInfo(self.timezone)).strftime("%Y-%m-%d-%H")
         # Return the current hour estimate
         logger.debug(
             "Sun ratio for %s is %s",
