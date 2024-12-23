@@ -288,6 +288,9 @@ class InverterAPI:
             # self.efficiency = infos[0].get("efficiency", DEFAULT_INVERTER_EFFICIENCY)
             self.plant_address = infos[0].get("address", None)
             self.plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
+            created_date = infos[0].get("createAt", None)
+            if created_date:
+                self.plant_created = datetime.fromisoformat(created_date)
 
         # With the plant info, go get the plant inverter serial number
         await self.get_inverter_sn()

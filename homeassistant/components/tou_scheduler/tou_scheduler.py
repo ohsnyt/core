@@ -394,42 +394,48 @@ class TOUScheduler:
         ):
             return
 
-        # logger.debug(">>>>>Calculating daily load averages<<<<<")
-        # Get the past GRID_BOOST_HISTORY number of days of load data
         days_of_load_history = self.data.data.get(
             GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY
         )
-        load_entity_ids = {
-            "sensor.tou_power_load",
-        }
+        load_entity_ids = {"sensor.power_load"}
         history_data = await self._request_ha_statistics(
             load_entity_ids, days_of_load_history
         )
 
-        # Log the history_data to see its structure
-        # logger.debug("History data: %s", history_data)
-
-        # Convert history_data to a DataFrame
         data = []
         for data_list in history_data.values():
             for item in data_list:
+                # Ensure that each item is valid
+                if (
+                    not isinstance(item, dict)
+                    or "start" not in item
+                    or "mean" not in item
+                ):
+                    logger.debug("Skipping invalid item: %s", item)
+                    continue
+
                 start_time = datetime.fromtimestamp(
                     item["start"], tz=ZoneInfo(self.inverter_api.timezone)
                 )
-                hour = start_time.hour
-                data.append({"hour": hour, "mean": item["mean"]})
+                data.append({"hour": start_time.hour, "mean": item["mean"]})
 
+        # Create DataFrame
         df = pd.DataFrame(data)
+        logger.debug("Created DataFrame with columns: %s", df.columns.tolist())
 
-        # Calculate the average load for each hour
+        # Check if DataFrame is empty or missing columns
+        if df.empty or "hour" not in df.columns or "mean" not in df.columns:
+            logger.warning("No valid load data found. Skipping load estimates.")
+            self.daily_load_averages = {hour: 0.0 for hour in range(24)}
+            return
+
+        # Group by "hour" and get averages
         hourly_averages = df.groupby("hour")["mean"].mean().to_dict()
-
-        # Update the daily load averages
         self.daily_load_averages = {
             hour: hourly_averages.get(hour, 0.0) for hour in range(24)
         }
 
-        # Log the daily load averages
+        # Log the results (optional)
         # logger.debug("Daily load averages: %s", self.daily_load_averages)
 
     async def _calculate_tou_parameters(self) -> None:
