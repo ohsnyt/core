@@ -38,7 +38,7 @@ class TOUSchedulerEntity(CoordinatorEntity):
         plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
 
         super().__init__(coordinator)
-        self._key = f"tou_{im_a}"
+        self._key = im_a
         self._attr_unique_id = f"{entry_id}_{self._key}"
         self._attr_icon = "mdi:toggle-switch"
         self._attr_name = f"{plant_name} ToU {im_a}"
@@ -48,127 +48,28 @@ class TOUSchedulerEntity(CoordinatorEntity):
         )
 
     @property
-    def name(self) -> str | None:
-        """Return the name of the sensor."""
-        return self._attr_name
-
-    @property
-    def unique_id(self) -> str | None:
-        """Return a unique ID."""
-        return self._attr_unique_id
-
-
-class BatteryEntity(CoordinatorEntity):
-    """TOU battery entity."""
-
-    def __init__(
-        self,
-        entry_id: str,
-        coordinator: DataUpdateCoordinator[dict[str, Any]],
-        # parent: str,
-    ) -> None:
-        """Initialize the sensor."""
-        im_a = "battery"
-        plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
-
-        super().__init__(coordinator)
-        self._coordinator = coordinator
-        self._key = f"tou_{im_a}"
-        self._attr_unique_id = f"{entry_id}_{self._key}"
-        self._attr_icon = "mdi:toggle-switch"
-        self._attr_name = f"{plant_name} ToU {im_a}"
-        self._device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry_id)},
-            name=self._attr_name,
-        )
-
-    @property
-    def name(self) -> str | None:
-        """Return the name of the sensor."""
-        return self._attr_name
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return the device info."""
-        return self._device_info
-
-    @property
-    def unique_id(self) -> str | None:
-        """Return a unique ID."""
-        return self._attr_unique_id
-
-
-class PlantEntity(CoordinatorEntity):
-    """Representation of a Plant."""
-
-    def __init__(
-        self,
-        entry_id: str,
-        coordinator: DataUpdateCoordinator[dict[str, Any]],
-        # parent: str,
-    ) -> None:
-        """Initialize the sensor."""
-        im_a = "plant"
-        plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
-
-        super().__init__(coordinator)
-        self._coordinator = coordinator
-        self._key = f"tou_{im_a}"
-        self._attr_unique_id = f"{entry_id}_{self._key}"
-        self._attr_icon = "mdi:toggle-switch"
-        self._attr_name = f"{plant_name} ToU {im_a}"
-        self._device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry_id)},
-            name=self._attr_name,
-        )
-        self._additional_device_info = {
-            "plant_created": coordinator.data.get(
+    def extra_state_attributes(self) -> dict[str, str]:
+        """Return the extra state attributes."""
+        return {
+            "created": self.coordinator.data.get(
                 "plant_created", "Plant created time n/a"
             ),
-        }
-
-    @property
-    def name(self) -> str | None:
-        """Return the name of the sensor."""
-        return self._attr_name
-
-    @property
-    def unique_id(self) -> str | None:
-        """Return a unique ID."""
-        return self._attr_unique_id
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return the device info."""
-        return self._device_info
-
-
-class InverterEntity(CoordinatorEntity):
-    """Representation of a Plant."""
-
-    def __init__(
-        self,
-        entry_id: str,
-        coordinator: DataUpdateCoordinator[dict[str, Any]],
-        # parent: str,
-    ) -> None:
-        """Initialize the sensor."""
-        im_a = "inverter"
-        plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
-
-        super().__init__(coordinator)
-        self._coordinator = coordinator
-        self._key = f"tou_{im_a}"
-        self._attr_unique_id = f"{entry_id}_{self._key}"
-        self._attr_icon = "mdi:toggle-switch"
-        self._attr_name = f"{plant_name} ToU {im_a}"
-        self._device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry_id)},
-            name=self._attr_name,
-        )
-        self._additional_device_info = {
-            "plant_created": coordinator.data.get(
-                "plant_created", "Plant created time n/a"
+            "cloud_name": self.coordinator.data.get("cloud_name", "Cloud name n/a"),
+            "cloud_token_refresh": self.coordinator.data.get(
+                "bearer_token_expires_on", "Unknown"
+            ),
+            "plant_name": self.coordinator.data.get("plant_name", "Plant name n/a"),
+            "plant_status": self.coordinator.data.get(
+                "plant_status", "Plant status n/a"
+            ),
+            "inverter_model": self.coordinator.data.get(
+                "inverter_model", "Inverter model n/a"
+            ),
+            "inverter_status": self.coordinator.data.get(
+                "inverter_status", "Inverter status n/a"
+            ),
+            "battery_status": self.coordinator.data.get(
+                "battery_status", "Battery status n/a"
             ),
         }
 
@@ -203,7 +104,7 @@ class ShadingEntity(CoordinatorEntity):
 
         super().__init__(coordinator)
         self._coordinator = coordinator
-        self._key = f"tou_{im_a}"
+        self._key = im_a
         self._attr_unique_id = f"{entry_id}_{self._key}"
         self._attr_icon = "mdi:toggle-switch"
         self._attr_name = f"{plant_name} ToU {im_a}"
@@ -240,51 +141,6 @@ class ShadingEntity(CoordinatorEntity):
         return attributes
 
 
-class CloudEntity(CoordinatorEntity):
-    """Representation of a Cloud. Base the unique id on the user email (userId)."""
-
-    def __init__(
-        self,
-        entry_id: str,
-        coordinator: DataUpdateCoordinator[dict[str, Any]],
-        # parent: str,
-    ) -> None:
-        """Initialize the sensor."""
-        im_a = "cloud"
-        plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
-
-        super().__init__(coordinator)
-        self._coordinator = coordinator
-        self._key = f"tou_{im_a}"
-        self._attr_unique_id = f"{entry_id}_{self._key}"
-        self._attr_icon = "mdi:toggle-switch"
-        self._attr_name = f"{plant_name} ToU {im_a}"
-        self._device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry_id)}, name=self._attr_name
-        )
-        self.extra_state_attributes = {
-            "created": coordinator.data.get("plant_created", "Plant created time n/a"),
-            "bearer_token_expires_on": coordinator.data.get(
-                "bearer_token_expires_on", "Unknown"
-            ),
-        }
-
-    @property
-    def name(self) -> str | None:
-        """Return the name of the sensor."""
-        return self._attr_name
-
-    @property
-    def unique_id(self) -> str | None:
-        """Return a unique ID."""
-        return self._attr_unique_id
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return the device info."""
-        return self._device_info
-
-
 class LoadEntity(CoordinatorEntity):
     """Representation of the average daily load.
 
@@ -303,7 +159,7 @@ class LoadEntity(CoordinatorEntity):
 
         super().__init__(coordinator)
         self._coordinator = coordinator
-        self._key = f"tou_{im_a}"
+        self._key = im_a
         self._attr_unique_id = f"{entry_id}_{self._key}"
         self._attr_icon = "mdi:toggle-switch"
         self._attr_name = f"{plant_name} ToU {im_a}"

@@ -79,7 +79,7 @@ class InverterAPI:
         self._session: ClientSession | None = None
         self._refresh_token: str | None = None
         self._bearer_token: str | None = None
-        self._bearer_token_expires_on: datetime | None = None
+        self.bearer_token_expires_on: datetime | None = None
 
         # Here is the plant info
         self.plant_address: str | None = None
@@ -245,7 +245,7 @@ class InverterAPI:
                 self._session.headers["Authorization"] = f"Bearer {token}"
                 self._refresh_token = data.get("refresh_token", None)
                 expires = data.get("expires_in", None)
-                self._bearer_token_expires_on = (
+                self.bearer_token_expires_on = (
                     datetime.now(ZoneInfo(self.timezone)) + timedelta(seconds=expires)
                     if expires
                     else None
@@ -501,8 +501,8 @@ class InverterAPI:
 
         # If we don't have a valid bearer token authenticate or die trying
         if (
-            not self._bearer_token_expires_on
-            or self._bearer_token_expires_on <= datetime.now(ZoneInfo(self.timezone))
+            not self.bearer_token_expires_on
+            or self.bearer_token_expires_on <= datetime.now(ZoneInfo(self.timezone))
         ):
             # Fail if we don't have username and password
             if not self._username or not self._password:

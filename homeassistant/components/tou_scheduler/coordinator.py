@@ -8,7 +8,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.debounce import Debouncer
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CLOUD_UPDATE_INTERVAL, DEBUGGING, DOMAIN, VERSION
 from .tou_scheduler import TOUScheduler
@@ -57,7 +57,11 @@ class OhSnytUpdateCoordinator(DataUpdateCoordinator):
         # NOTE: This function is called by _async_refresh. The flow is that we update whatever we need in our object, then return
         # a dict of the sensor data. The caller will then use that with the @data.setter to update the data served by home assistant.
         # Go update the sensors and return a dict of the sensor data.
-        return await self.scheduler.update_sensors()
+        try:
+            return await self.scheduler.update_sensors()
+        except Exception as e:
+            logger.error("Failed to update sensors: %s", e)
+            raise UpdateFailed(f"Failed to update sensors: {e}") from e
 
     @property
     def data(self):

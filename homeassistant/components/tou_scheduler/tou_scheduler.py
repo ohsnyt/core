@@ -104,7 +104,7 @@ class TOUScheduler:
             "grid_boost_soc": self.grid_boost_starting_soc,
             "grid_boost_start": self.grid_boost_start,
             "grid_boost_on": self.grid_boost_on,
-            "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 0),
+            "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
             # Inverter data
             "data_updated": self.inverter_api.data_updated
             if self.inverter_api.data_updated
@@ -123,11 +123,16 @@ class TOUScheduler:
             or "unknown",
             # Plant info
             "plant_id": self.inverter_api.plant_id or "unknown",
-            "plant_created": str(self.inverter_api.plant_created)
+            "plant_created": str(self.inverter_api.plant_created.date())
             if self.inverter_api.plant_created
             else "unknown",
             "plant_name": self.inverter_api.plant_name or "unknown",
             "plant_status": str(self.inverter_api.plant_status),
+            "bearer_token_expires_on": str(
+                self.inverter_api.bearer_token_expires_on.date()
+                if self.inverter_api.bearer_token_expires_on
+                else "unknown"
+            ),
             # Solcast data
             "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(
                 current_hour
@@ -426,13 +431,13 @@ class TOUScheduler:
         # Check if DataFrame is empty or missing columns
         if df.empty or "hour" not in df.columns or "mean" not in df.columns:
             logger.warning("No valid load data found. Skipping load estimates.")
-            self.daily_load_averages = {hour: 0.0 for hour in range(24)}
+            self.daily_load_averages = {hour: 1000.0 for hour in range(24)}
             return
 
         # Group by "hour" and get averages
         hourly_averages = df.groupby("hour")["mean"].mean().to_dict()
         self.daily_load_averages = {
-            hour: hourly_averages.get(hour, 0.0) for hour in range(24)
+            hour: hourly_averages.get(hour, 1000.0) for hour in range(24)
         }
 
         # Log the results (optional)
@@ -472,8 +477,8 @@ class TOUScheduler:
         while batt_wh_usable and batt_wh_usable > 0:
             # Calculate battery life remaining
             hour_impact = int(
-                self.daily_load_averages.get(current_hour, 0)
-                * ((self.inverter_api.efficiency or DEFAULT_INVERTER_EFFICIENCY) / 100)
+                self.daily_load_averages.get(current_hour, 1000)
+                / ((self.inverter_api.efficiency or DEFAULT_INVERTER_EFFICIENCY) / 100)
             )
             key = f"{current_day}-{current_hour}"
             hour_impact += int(

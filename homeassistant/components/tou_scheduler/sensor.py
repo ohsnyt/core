@@ -11,21 +11,12 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEBUGGING, DOMAIN
 from .coordinator import OhSnytUpdateCoordinator
-from .entity import (
-    BatteryEntity,
-    CloudEntity,
-    InverterEntity,
-    LoadEntity,
-    PlantEntity,
-    ShadingEntity,
-    TOUSchedulerEntity,
-)
+from .entity import LoadEntity, ShadingEntity, TOUSchedulerEntity
 
 logger = logging.getLogger(__name__)
 if DEBUGGING:
@@ -48,14 +39,14 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    "sun_ratio": OhSnytSensorEntityDescription(
-        key="sun_ratio",
-        icon="mdi:percent-outline",
-        name="Ratio of full sun",
-        native_unit_of_measurement="%",
-        device_class=SensorDeviceClass.ILLUMINANCE,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
+    # "sun_ratio": OhSnytSensorEntityDescription(
+    #     key="sun_ratio",
+    #     icon="mdi:percent-outline",
+    #     name="Ratio of full sun",
+    #     native_unit_of_measurement="%",
+    #     device_class=SensorDeviceClass.ILLUMINANCE,
+    #     state_class=SensorStateClass.MEASUREMENT,
+    # ),
     # Battery related sensors.
     "batt_soc": OhSnytSensorEntityDescription(
         key="batt_soc",
@@ -137,69 +128,39 @@ async def async_setup_entry(
         return
 
     # NOTE: I was trying to set up a parent entity for all the sensors, but it was not working.
-    # Set the parent id for all the sensors
+    # Since the plant_id is stable, we can use it as the unique identifier unique_prefix for all sensors.
     plant_id = coordinator.data.get("plant_id")
-    # if plant_id is None:
-    #     logger.error("Plant ID is missing from coordinator data")
-    #     return
-    parent = f"{plant_id}_tou_scheduler"
+    if plant_id is None:
+        logger.error("This never happens: Plant ID is missing from coordinator data.")
+        return
+    unique_prefix = f"{plant_id}_tou"
+    parent = f"{unique_prefix}_scheduler"
 
-    # Add the entity device level sensors: Cloud, Plant, Inverter, Solcast, Shading.
-    async_add_entities(
-        [
-            TOUSchedulerEntity(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                # parent=parent,
-            ),
-            BatteryEntity(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                # parent=parent,
-            ),
-            CloudEntity(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                # parent=parent,
-            ),
-            PlantEntity(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                # parent=parent,
-            ),
-            InverterEntity(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                # parent=parent,
-            ),
-            ShadingEntity(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                # parent=parent,
-            ),
-            LoadEntity(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                # parent=parent,
-            ),
-        ]
-    )
-    # Add the "normal" Sol-Ark sensors for the inverter
-    async_add_entities(
-        [
-            OhSnytSensor(
-                entry_id=plant_id,
-                coordinator=coordinator,
-                parent=parent,
-                entity_description=entity_description,
-            )
-            for entity_description in TOU_SENSOR_ENTITIES.values()
-        ]
-    )
+    # Add special entity sensors: Scheduler, Battery, Cloud, Plant, Inverter, Shading and Load (from entity.py)
+    entity_list = [TOUSchedulerEntity, ShadingEntity, LoadEntity]
+    entities = [
+        entity(entry_id=unique_prefix, coordinator=coordinator)
+        for entity in entity_list
+    ]
+    async_add_entities(entities)
+
+    # Add the "normal" Sol-Ark sensors for the inverter (from this file)
+    sensors = [
+        OhSnytSensor(
+            entry_id=unique_prefix,
+            coordinator=coordinator,
+            parent=parent,
+            description=entity_description,
+        )
+        for entity_description in TOU_SENSOR_ENTITIES.values()
+    ]
+    async_add_entities(sensors)
 
 
 class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
-    """Representation of a Solark Cloud sensor."""
+    """Representation of a standard sensor."""
+
+    has_entity_name = True
 
     def __init__(
         self,
@@ -207,25 +168,30 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         entry_id: str,
         parent: str,
         coordinator: OhSnytUpdateCoordinator,
-        entity_description: OhSnytSensorEntityDescription,
+        description: OhSnytSensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._key: str = entity_description.key
-        self._attr_unique_id: str = f"{entry_id}_{entity_description.key}"
-        self._attr_icon: str = entity_description.icon or "mdi:flash"
-        # self._attr_name: str = entity_description.name or "Unknown"
-        self._attr_native_unit_of_measurement: str | None = (
-            entity_description.native_unit_of_measurement
-        )
-        self._attr_device_class: SensorDeviceClass | None = (
-            entity_description.device_class
-        )
-        self._attr_state_class: str | None = entity_description.state_class
-        self._device_info: DeviceInfo = DeviceInfo(
-            identifiers={(DOMAIN, entry_id)},
-            name=self._attr_name,
-            via_device=(DOMAIN, parent) if parent else ("", ""),
+        self.entity_description = description
+        self._key = description.key
+        self._attr_unique_id = f"{entry_id}_{description.key}"
+        self._attr_icon = description.icon or "mdi:flash"
+        name: str = description.name if isinstance(description.name, str) else "Unknown"
+        self._attr_name = name
+        self._attr_native_unit_of_measurement = description.native_unit_of_measurement
+        self._attr_device_class = description.device_class
+        self._attr_state_class = description.state_class
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry_id)},
+            "name": self._attr_name,
+            # via_device=(DOMAIN, parent) if parent else ("", ""),
+        }
+        logger.debug(
+            "++Created sensor: %s (%s). Native value is: %s %s",
+            self._attr_name,
+            self._attr_unique_id,
+            self.native_value,
+            self._attr_native_unit_of_measurement,
         )
 
     @property
@@ -238,13 +204,11 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         """Return a unique ID."""
         return self._attr_unique_id
 
-    def native_value(self):
-        """Return the state of the sensor."""
-        x = self.coordinator.data.get(self._key)
-        logger.debug("native_value: %s", x)
-        return self.coordinator.data.get(self._key)
-
     @property
-    def device_info(self) -> DeviceInfo:
-        """Return the device info."""
-        return self._device_info
+    def native_value(self) -> str | int | float | None:
+        """Return the state of the sensor."""
+        value = self.coordinator.data.get(self.entity_description.key)
+        if not isinstance(value, (str, int, float, type(None))):
+            logger.error("Invalid type for native_value: %s (%s)", value, type(value))
+            return None
+        return value
