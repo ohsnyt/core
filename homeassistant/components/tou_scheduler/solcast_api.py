@@ -104,7 +104,7 @@ class SolcastAPI:
         # Return the current hour estimate
         logger.debug(
             "PV estimate for %s is %s",
-            current_hour,
+            printable_hour(int(current_hour[-2:])),
             round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0),
         )
         return round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0)
@@ -115,7 +115,7 @@ class SolcastAPI:
         # Return the current hour estimate
         logger.debug(
             "Sun ratio for %s is %s",
-            current_hour,
+            printable_hour(int(current_hour[-2:])),
             self.forecast.get(current_hour, (0.0, 0.0))[1],
         )
         return self.forecast.get(current_hour, (0.0, 0.0))[1]
@@ -302,3 +302,20 @@ class SunStatus(Enum):
     PARTIAL = 1
     FULL = 2
     UNKNOWN = 9
+
+
+def printable_hour(hour: int) -> str:
+    """Return a printable hour string in 12-hour format with 'am' or 'pm' suffix.
+
+    Args:
+        hour: Hour in 24-hour format (0-23).
+
+    Returns:
+        Formatted string in 12-hour format with am/pm.
+
+    """
+    return (
+        f"{'\u00a0' if (hour%12 < 10 and hour > 0) else ''}"
+        f"{(hour % 12) or 12}"
+        f"{'am' if hour < 12 else 'pm'}"
+    )

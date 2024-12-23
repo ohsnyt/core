@@ -83,6 +83,13 @@ class TOUSchedulerEntity(CoordinatorEntity):
         """Return a unique ID."""
         return self._attr_unique_id
 
+    @property
+    def state(self) -> str:
+        """Return the state of the sensor."""
+        if self.coordinator.data.get("plant_status") == "Active":
+            return "Active"
+        return self.coordinator.data.get("plant_status", "Plant status n/a")
+
 
 class ShadingEntity(CoordinatorEntity):
     """Representation of a Shading.

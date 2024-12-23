@@ -53,7 +53,7 @@ class OhSnytUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self):
         """Fetch all data for your sensors here."""
-        logger.debug(msg="Fetching Sol-Ark cloud data")
+        logger.debug(msg="Fetching sensor data")
         # NOTE: This function is called by _async_refresh. The flow is that we update whatever we need in our object, then return
         # a dict of the sensor data. The caller will then use that with the @data.setter to update the data served by home assistant.
         # Go update the sensors and return a dict of the sensor data.

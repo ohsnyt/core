@@ -51,8 +51,8 @@ class TOUScheduler:
         """Initialize the TOU Scheduler."""
         self.hass = hass
         self.data = entry
-        # self.dashboard_card = DashboardCard()
         self.timezone = hass.config.time_zone or "UTC"
+        self.status = "Starting"
 
         # Here is the inverter info
         self.inverter_api: InverterAPI = InverterAPI()
@@ -103,6 +103,7 @@ class TOUScheduler:
             return {}
 
         return {
+            "status": self.status,
             "battery_minutes": self.batt_minutes_remaining,
             "grid_boost_soc": self.grid_boost_starting_soc,
             "grid_boost_start": self.grid_boost_start,
@@ -168,6 +169,9 @@ class TOUScheduler:
         )
         self.grid_boost_on = entry_options.get(GRID_BOOST_ON, DEFAULT_GRID_BOOST_ON)
 
+        # Set status to indicate we have the plant info
+        self.status = "Please configure"
+
         # Get the Solcast API key and resource ID from configuration, if missing log an error and return
         api_key = entry_options.get(SOLCAST_API_KEY)
         resource_id = entry_options.get(SOLCAST_RESOURCE_ID)
@@ -182,6 +186,9 @@ class TOUScheduler:
         self.solcast_api.update_hours = entry_options.get(
             SOLCAST_UPDATE_HOURS, DEFAULT_SOLCAST_UPDATE_HOURS
         )
+
+        # Set status to indicate we have the Solcast info
+        self.status = "Working"
 
     async def async_start(self) -> None:
         """Start the TOU Scheduler, making sure the inverter api and solcast api authenticate."""
@@ -200,12 +207,11 @@ class TOUScheduler:
         #   (This must be done first because the other updates depend on current inverter data, especially at startup)
         await self.inverter_api.refresh_data()
 
-        # Once a day...
-        # ...Update the Solcast data
+        # Check if we need to update the Solcast data (startup and as per user schedule)
         await self.solcast_api.refresh_data()
-        # ...Update our daily shading values based on yesterday's data
+        # Update our daily shading values (various parts done at different schedules)
         await self._calculate_shading()
-        # ...Update the hourly load estimates
+        # Update the hourly load estimates (once a day)
         await self._calculate_load_estimates()
 
         # Hourly based on the above daily information...
@@ -283,7 +289,7 @@ class TOUScheduler:
                     await file.write(json.dumps(self.daily_shading))
 
     async def _calculate_load_estimates(self) -> None:
-        """Calculate the daily load averages."""
+        """Calculate the daily load averages once a day."""
 
         if self.inverter_api is None:
             logger.error("Cannot calculate load estimates. Inverter API is not set")
