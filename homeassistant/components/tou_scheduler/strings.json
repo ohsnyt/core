@@ -62,8 +62,8 @@
       }
     },
     "error": {
-      "invalid_solark_auth": "Invalid authentication, please check your username and password.",
-      "invalid_solcast_auth": "Solcast API login failed."
+      "invalid_solark_auth": "Setup: Invalid authentication, please check your username and password.",
+      "invalid_solcast_auth": "Setup: Solcast API login failed."
     }
   }
 }

@@ -8,11 +8,24 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 
-from .const import DOMAIN, GRID_BOOST_ON_OPTIONS
+from .const import DOMAIN
 from .solark_inverter_api import InverterAPI  # Add this import
 from .solcast_api import SolcastAPI, SolcastStatus
 
 _logger = logging.getLogger(__name__)
+
+
+def validate_forecast_hours(value):
+    """Validate that the value is a list of 1-4 integers in the range 0-23."""
+    if not isinstance(value, list):
+        raise vol.Invalid("Must be a list")
+    if not (1 <= len(value) <= 4):
+        raise vol.Invalid("List must contain between 1 and 4 items")
+    for item in value:
+        if not isinstance(item, int) or not (0 <= item <= 23):
+            raise vol.Invalid("Each item must be an integer between 0 and 23")
+    return value
+
 
 DATA_SCHEMA_STEP_1 = vol.Schema(
     {
@@ -32,11 +45,15 @@ DATA_SCHEMA_STEP_3 = vol.Schema(
     {
         vol.Required("boost_calculation"): vol.In(["on", "off"]),
         vol.Required("history_days"): vol.In(["1", "2", "3", "4", "5", "6", "7"]),
-        vol.Required("forecast_hours"): vol.In(["1", "2", "3", "4"]),
-        vol.Required("min_battery_soc"): vol.All(
+        vol.Required("forecast_hours"): vol.All(
+            vol.Coerce(list), validate_forecast_hours
+        ),
+        vol.Required("min_battery_soc", default=15): vol.All(
             vol.Coerce(int), vol.Range(min=5, max=100)
         ),
-        vol.Required("percentile"): vol.All(vol.Coerce(int), vol.Range(min=10, max=90)),
+        vol.Required("percentile", default=25): vol.All(
+            vol.Coerce(int), vol.Range(min=10, max=90)
+        ),
     }
 )
 
@@ -137,7 +154,7 @@ class TouSchedulerOptionFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        # Do we do anything here?
 
     async def async_step_init(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Manage the options."""
@@ -148,7 +165,7 @@ class TouSchedulerOptionFlow(config_entries.OptionsFlow):
                     vol.Required(
                         "grid_boost_on",
                         default=self.config_entry.options.get("grid_boost_on", "off"),
-                    ): vol.In(GRID_BOOST_ON_OPTIONS),
+                    ): vol.In(["on", "off"]),
                 }
             ),
         )

@@ -28,14 +28,13 @@ from .const import (
     GRID_BOOST_HISTORY,
     GRID_BOOST_MIDNIGHT_SOC,
     GRID_BOOST_ON,
-    GRID_BOOST_STARTING_SOC,
     ON,
     SOLCAST_API_KEY,
     SOLCAST_RESOURCE_ID,
     SOLCAST_UPDATE_HOURS,
 )
 from .solark_inverter_api import InverterAPI
-from .solcast_api import SolcastAPI, SolcastStatus
+from .solcast_api import SolcastAPI
 
 logger = logging.getLogger(__name__)
 if DEBUGGING:
@@ -143,62 +142,55 @@ class TOUScheduler:
             "load": str(self.daily_load_averages),
         }
 
-    def authenticate(self) -> None:
-        """Start the TOU Scheduler."""
-        # First save the entry data
+    async def async_start(self) -> None:
+        """Start the TOU Scheduler, making sure the inverter api and solcast api authenticate."""
+        # First get the configuration entry data for authentication and setup
         entry_data = self.data.data
-        entry_options = self.data.options
-        # Get username and password from configuration, if missing log an error and return
+        # Set the timezone here, in the inverter_api, and solcast_api
+        self.timezone = self.hass.config.time_zone or "UTC"
+        self.inverter_api.timezone = self.timezone
+        self.solcast_api.timezone = self.timezone
+
+        # Setup the inverter api
         inverter_username = entry_data.get("username")
         inverter_password = entry_data.get("password")
         if inverter_username is None or inverter_password is None:
             logger.error("Inverter username or password is missing")
             return
-        # Set inverter key variables
         self.inverter_api.username = inverter_username
         self.inverter_api.password = inverter_password
-        self.inverter_api.plant_id = entry_data.get("plant_id") or "unknown"
-        self.inverter_api.timezone = self.timezone or "UTC"
+        result = await self.inverter_api.authenticate()
+        if result is False:
+            logger.error("Inverter authentication failed")
+            return
+        result = await self.inverter_api.get_plant()
+        if result is None:
+            logger.error("Inverter plant data not found")
+            return
 
-        # Set ToU variables from the options in the configuration
-        self.inverter_api.grid_boost_midnight_soc = entry_options.get(
-            GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
-        )
-        self.inverter_api.grid_boost_starting_soc = entry_options.get(
-            GRID_BOOST_STARTING_SOC, DEFAULT_GRID_BOOST_STARTING_SOC
-        )
-        self.grid_boost_on = entry_options.get(GRID_BOOST_ON, DEFAULT_GRID_BOOST_ON)
-
-        # Set status to indicate we have the plant info
-        self.status = "Please configure"
-
-        # Get the Solcast API key and resource ID from configuration, if missing log an error and return
-        api_key = entry_options.get(SOLCAST_API_KEY)
-        resource_id = entry_options.get(SOLCAST_RESOURCE_ID)
+        # Setup the solcast api
+        api_key = entry_data.get(SOLCAST_API_KEY)
+        resource_id = entry_data.get(SOLCAST_RESOURCE_ID)
         if api_key is None or resource_id is None:
             logger.error("Solcast API key or resource ID is missing")
             return
-
-        # Set status to indicate we have the Solcast info
-        self.status = "Working"
-        # Set remaining Solcast variables from the options in the configuration
         self.solcast_api.api_key = api_key
         self.solcast_api.resource_id = resource_id
-        self.solcast_api.timezone = self.timezone or "UTC"
-        self.solcast_api.update_hours = entry_options.get(
+        self.inverter_api.grid_boost_midnight_soc = entry_data.get(
+            GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
+        )
+        self.inverter_api.grid_boost_starting_soc = 25
+        self.grid_boost_on = entry_data.get(GRID_BOOST_ON, DEFAULT_GRID_BOOST_ON)
+        self.solcast_api.update_hours = entry_data.get(
             SOLCAST_UPDATE_HOURS, DEFAULT_SOLCAST_UPDATE_HOURS
         )
+        # TEMP
+        self.solcast_api.update_hours = [23]
 
-    async def async_start(self) -> None:
-        """Start the TOU Scheduler, making sure the inverter api and solcast api authenticate."""
-        if await self.inverter_api.authenticate() is False:
-            logger.error("Inverter authentication failed")
-            return
-        await self.inverter_api.get_plant()
-        await self.solcast_api.refresh_data()
-        if self.solcast_api.status == SolcastStatus.NOT_CONFIGURED:
-            logger.error("Solcast API key or resource ID is missing")
-            return
+        # Set status to indicate we are ready to work
+        self.status = "Working"
+        # Go get the data for the sensors
+        await self.update_sensors()
 
     async def update_sensors(self) -> dict[str, int | float | str]:
         """Update the sensors with the latest data and return the updated sensor data as a dictionary."""
@@ -425,7 +417,7 @@ class TOUScheduler:
         # DONE WITH CALCULATING BATTERY LIFE IN MINUTES
         # Calculate SOC required for grid boost
         # Initialize variables
-        self.grid_boost_starting_soc = DEFAULT_GRID_BOOST_STARTING_SOC
+        self.grid_boost_starting_soc = 25
         current_soc = 0
         current_hour = now.hour
 

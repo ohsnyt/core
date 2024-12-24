@@ -38,14 +38,14 @@ DEFAULT_INVERTER_EFFICIENCY = 0.85
 BOOST_OPTIONS = "boost_options"
 SOLCAST_API_KEY = "api_key"
 SOLCAST_RESOURCE_ID = "resource_id"
-GRID_BOOST_HISTORY = "grid_boost_history"
+GRID_BOOST_HISTORY = "history_days"
 GRID_BOOST_SOC_HIGH = 60
-GRID_BOOST_ON = "grid_boost_on"
+GRID_BOOST_ON = "boost_calculation"
 GRID_BOOST_ON_OPTIONS = {"on": "On", "off": "Off"}
-GRID_BOOST_MIDNIGHT_SOC = "grid_boost_midnight_soc"
-GRID_BOOST_STARTING_SOC = "grid_boost_starting_soc"
-SOLCAST_PERCENTILE = "solcast_percentile"
-SOLCAST_UPDATE_HOURS = "solcast_update_hours"
+GRID_BOOST_MIDNIGHT_SOC = "min_battery_soc"
+# GRID_BOOST_STARTING_SOC = "grid_boost_starting_soc"
+SOLCAST_PERCENTILE = "percentile"
+SOLCAST_UPDATE_HOURS = "forecast_hours"
 TIMEOUT: ClientTimeout = ClientTimeout(total=10)  # 10 second timeout for all requests
 TIMEZONE = "timezone"
 

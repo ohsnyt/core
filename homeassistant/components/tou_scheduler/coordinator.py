@@ -43,9 +43,6 @@ class OhSnytUpdateCoordinator(DataUpdateCoordinator):
         # Create the scheduler object.
         self.scheduler = TOUScheduler(hass, entry)
 
-        # Attempt to authenticate the inverter cloud api and the Solcast api.
-        self.scheduler.authenticate()
-
     async def async_start(self):
         """Start the scheduler."""
         logger.info("Starting OhSnytUpdateCoordinator")
