@@ -11,6 +11,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfPower
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo  # Correct import
 from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -144,7 +145,7 @@ async def async_setup_entry(
 class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
     """Representation of a standard sensor."""
 
-    has_entity_name = True
+    has_entity_name = False  # Prevent Home Assistant from generating a friendly name
 
     def __init__(
         self,
@@ -159,8 +160,9 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         self.entity_description = description
         self._key = description.key
         self._attr_unique_id = f"{entry_id}_{description.key}"
-        self._attr_icon = description.icon or "mdi:flash"
-        name: str = description.name if isinstance(description.name, str) else "Unknown"
+        icon = description.icon if isinstance(description.icon, str) else "mdi:flash"
+        self._attr_icon = icon
+        name = description.name if isinstance(description.name, str) else "Unknown"
         self._attr_name = name
         self._attr_native_unit_of_measurement = description.native_unit_of_measurement
         self._attr_device_class = description.device_class
@@ -175,11 +177,11 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         )
         logger.debug(
             "++Created sensor: %s. Native value is: %s %s.\n(entity_id: %s, _attr_unique_id: %s)",
-            self.name,
-            self.state,
+            self._attr_name,
+            self.native_value,
             self._attr_native_unit_of_measurement,
             self.entity_id,
-            self.unique_id,
+            self._attr_unique_id,
         )
 
     @property
@@ -193,11 +195,16 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         return self._attr_unique_id
 
     @property
-    def native_value(self) -> int | float | None:
+    def native_value(self) -> str | int | float | None:
         """Return the state of the sensor."""
-        value = round(self.coordinator.data.get(self.entity_description.key), 0)
-        if not isinstance(value, (str, int, float, type(None))):
+        value = self.coordinator.data.get(self.entity_description.key)
+        logger.debug("native_value: %s", value)
+        if not isinstance(value, (int, float, type(None))):
             logger.error("Invalid type for native_value: %s (%s)", value, type(value))
             return None
+        return int(value) if isinstance(value, float) else value
 
-        return int(value) if value is not None else None
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """Return the device info."""
+        return self._attr_device_info
