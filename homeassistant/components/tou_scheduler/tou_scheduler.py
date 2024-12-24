@@ -294,8 +294,8 @@ class TOUScheduler:
         ):
             return
 
-        days_of_load_history = self.data.data.get(
-            GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY
+        days_of_load_history = int(
+            self.data.data.get(GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY)
         )
         sensor = f"sensor.{self.inverter_api.plant_id}_power_to_load"
         load_entity_ids = {sensor}
