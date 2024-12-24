@@ -198,7 +198,6 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
     def native_value(self) -> str | int | float | None:
         """Return the state of the sensor."""
         value = self.coordinator.data.get(self.entity_description.key)
-        logger.debug("native_value: %s", value)
         if not isinstance(value, (int, float, type(None))):
             logger.error("Invalid type for native_value: %s (%s)", value, type(value))
             return None

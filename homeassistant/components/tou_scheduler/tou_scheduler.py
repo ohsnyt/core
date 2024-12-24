@@ -179,6 +179,8 @@ class TOUScheduler:
             logger.error("Solcast API key or resource ID is missing")
             return
 
+        # Set status to indicate we have the Solcast info
+        self.status = "Working"
         # Set remaining Solcast variables from the options in the configuration
         self.solcast_api.api_key = api_key
         self.solcast_api.resource_id = resource_id
@@ -186,9 +188,6 @@ class TOUScheduler:
         self.solcast_api.update_hours = entry_options.get(
             SOLCAST_UPDATE_HOURS, DEFAULT_SOLCAST_UPDATE_HOURS
         )
-
-        # Set status to indicate we have the Solcast info
-        self.status = "Working"
 
     async def async_start(self) -> None:
         """Start the TOU Scheduler, making sure the inverter api and solcast api authenticate."""
