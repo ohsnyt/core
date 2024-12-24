@@ -103,7 +103,7 @@ class TOUScheduler:
 
         return {
             "status": self.status,
-            "battery_minutes": self.batt_minutes_remaining,
+            "batt_time": self.batt_minutes_remaining / 60,
             "grid_boost_soc": self.grid_boost_starting_soc,
             "grid_boost_start": self.grid_boost_start,
             "grid_boost_on": self.grid_boost_on,
@@ -297,7 +297,7 @@ class TOUScheduler:
         days_of_load_history = int(
             self.data.data.get(GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY)
         )
-        sensor = f"sensor.{self.inverter_api.plant_id}_power_to_load"
+        sensor = f"sensor.{self.inverter_api.plant_id}_tou_power_load"
         load_entity_ids = {sensor}
         history_data = await self._request_ha_statistics(
             load_entity_ids, days_of_load_history

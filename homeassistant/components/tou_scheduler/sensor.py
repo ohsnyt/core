@@ -40,6 +40,7 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     "power_battery": OhSnytSensorEntityDescription(
         key="power_battery",
@@ -48,6 +49,7 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     "power_pv": OhSnytSensorEntityDescription(
         key="power_pv",
@@ -56,6 +58,7 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     "power_grid": OhSnytSensorEntityDescription(
         key="power_grid",
@@ -64,6 +67,7 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     "power_load": OhSnytSensorEntityDescription(
         key="power_load",
@@ -72,6 +76,7 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     # Grid boost related sensors.
     "grid_boost_soc": OhSnytSensorEntityDescription(
@@ -81,6 +86,7 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         native_unit_of_measurement="%",
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     # Battery related sensors.
     "batt_soc": OhSnytSensorEntityDescription(
@@ -90,6 +96,16 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         native_unit_of_measurement="%",
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+    ),
+    "batt_time": OhSnytSensorEntityDescription(
+        key="batt_time",
+        icon="mdi:timer-outline",
+        name="Battery Time Remaining",
+        native_unit_of_measurement="h",
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
     ),
 }
 
@@ -176,7 +192,7 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
             "sensor.{}", self._attr_unique_id, hass=coordinator.hass
         )
         logger.debug(
-            "++Created sensor: %s. Native value is: %s %s.\n(entity_id: %s, _attr_unique_id: %s)",
+            "\n++Created sensor: %s. Native value is: %s %s. (entity_id: %s, _attr_unique_id: %s)",
             self._attr_name,
             self.native_value,
             self._attr_native_unit_of_measurement,
@@ -201,7 +217,7 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         if not isinstance(value, (int, float, type(None))):
             logger.error("Invalid type for native_value: %s (%s)", value, type(value))
             return None
-        return int(value) if isinstance(value, float) else value
+        return value if isinstance(value, float) else value
 
     @property
     def device_info(self) -> DeviceInfo | None:
