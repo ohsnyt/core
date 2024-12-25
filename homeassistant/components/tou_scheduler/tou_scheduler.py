@@ -74,6 +74,7 @@ class TOUScheduler:
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
         self.grid_boost_starting_soc: int = DEFAULT_GRID_BOOST_STARTING_SOC
+        self._grid_boost_recalc_hour: int = datetime.now().hour
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
         self.grid_boost_on: str = DEFAULT_GRID_BOOST_ON
 
@@ -203,7 +204,8 @@ class TOUScheduler:
         # Hourly based on the above daily information...
         #  ...compute remaining battery life and the grid boost SOC...
         #     ...and update the inverter if the grid boost SoC changes
-        await self._calculate_tou_parameters()
+        await self._calculate_tou_battery_remaining_time()
+        await self._calculate_tou_boost_soc()
 
         # Return the updated sensor data
         return self.to_dict()
@@ -338,17 +340,14 @@ class TOUScheduler:
         # Log the results (optional)
         # logger.debug("Daily load averages: %s", self.daily_load_averages)
 
-    async def _calculate_tou_parameters(self) -> None:
-        """Calculate remaining battery life and grid boost SOC.
+    async def _calculate_tou_battery_remaining_time(self) -> None:
+        """Calculate remaining battery life.
 
-        Save and log any changes
         Update the inverter if the SoC changes.
         """
 
-        if self.inverter_api is None:
-            logger.error(
-                "Cannot calculate battery life and grid boost. Inverter API is not set"
-            )
+        # Don't repeat if we already did it this hour
+        if self._grid_boost_recalc_hour != datetime.now().hour:
             return
 
         # For each hour going forward, we need to calculate how long the battery will last until completely exhausted.
@@ -361,7 +360,6 @@ class TOUScheduler:
         )
         batt_wh_usable = self.inverter_api.batt_wh_usable or 0
         minutes = 0
-        efficiency = 100 / (self.inverter_api.efficiency or 95)
         boost_min_wh = self.inverter_api.grid_boost_wh_min or 0
         # During the grid boost range we can't go below the grid boost SoC amount.
         boost_range = range(
@@ -379,7 +377,10 @@ class TOUScheduler:
 
         while batt_wh_usable > 0:
             # Subtract load, add PV generation, subtract shading for the hour
-            load = self.daily_load_averages.get(current_hour, 1000) / efficiency
+            load = (
+                self.daily_load_averages.get(current_hour, 1000)
+                / self.inverter_api.efficiency
+            )
             pv_forecast = self.solcast_api.forecast.get(
                 f"{current_day}-{current_hour}", (0.0, 0.0)
             )
@@ -415,13 +416,25 @@ class TOUScheduler:
             starting_time,
             round(minutes / 60, 1),
         )
+        # Reset the recalc hour variable in the _calculate_tou_boost_soc function
 
-        # DONE WITH CALCULATING BATTERY LIFE IN MINUTES
+    async def _calculate_tou_boost_soc(self) -> None:
+        """Calculate tomorrow grid boost SOC once an hour.
+
+        Save and log any changes
+        Update the inverter if the SoC changes.
+        """
+
+        # Don't repeat if we already did it this hour
+        if self._grid_boost_recalc_hour != datetime.now().hour:
+            return
+
         # Calculate SOC required for grid boost for tomorrow
         # Initialize variables
         self.grid_boost_starting_soc = 25
         required_soc = self.grid_boost_starting_soc
-        tomorrow = now.date() + timedelta(days=1)
+        tomorrow = datetime.now().date() + timedelta(days=1)
+        current_hour: int = datetime.now().hour
 
         logger.debug(
             "--------- Calculating grid boost SoC for %s ---------",
@@ -434,7 +447,10 @@ class TOUScheduler:
 
         for hour in range(6, 23):
             # Calculate the load for the hour (multiplied by the efficiency factor)
-            hour_load = self.daily_load_averages.get(int(hour), 1000) * efficiency
+            hour_load = (
+                self.daily_load_averages.get(int(hour), 1000)
+                * self.inverter_api.efficiency
+            )
             hour_pv_forecast = self.solcast_api.forecast.get(
                 f"{tomorrow}-{current_hour}", 0.0
             )
@@ -482,6 +498,8 @@ class TOUScheduler:
             self.inverter_api.grid_boost_midnight_soc,
             self.grid_boost_starting_soc,
         )
+        # Reset the recalc hour variable
+        self._grid_boost_recalc_hour = datetime.now().hour
 
     async def _request_ha_statistics(
         self, entity_ids: set[str], days: int

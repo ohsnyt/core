@@ -27,6 +27,7 @@ from .const import (
     DEFAULT_GRID_BOOST_ON,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
+    DEFAULT_INVERTER_EFFICIENCY,
     OFF,
     TIMEOUT,
 )
@@ -85,7 +86,7 @@ class InverterAPI:
         self.plant_address: str | None = None
         self.plant_created: datetime | None = None
         self.plant_id: str | None = None
-        self.efficiency: float | None = None
+        self.efficiency: float = DEFAULT_INVERTER_EFFICIENCY
         self.plant_name: str | None = None
         self.plant_status: Plant = Plant.UNKNOWN
         self.timezone: str = "UTC"
@@ -285,7 +286,6 @@ class InverterAPI:
         if infos:
             self.plant_name = infos[0].get("name", None)
             self.plant_id = infos[0].get("id", None)
-            # self.efficiency = infos[0].get("efficiency", DEFAULT_INVERTER_EFFICIENCY)
             self.plant_address = infos[0].get("address", None)
             self.plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
             created_date = infos[0].get("createAt", None)
@@ -419,8 +419,10 @@ class InverterAPI:
         )
         # Prevent divide by zero. Only set the total efficiency if we have a valid source
         if (total_source) > 0:
-            efficiency = round(100 * (total_load / total_source), 1)
-        logger.info("Total power efficiency is %s", efficiency)
+            efficiency = round((total_load / total_source), 2)
+        else:
+            efficiency = DEFAULT_INVERTER_EFFICIENCY
+        logger.info("Total power efficiency is %.0f", efficiency * 100)
         self.efficiency = efficiency
 
     async def _read_settings(self) -> dict[str, Any]:
