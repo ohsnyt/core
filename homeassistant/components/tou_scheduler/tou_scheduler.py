@@ -399,7 +399,7 @@ class TOUScheduler:
             batt_wh_usable = int(max(0, batt_wh_usable - hour_impact))
             # Monitor progress
             logger.debug(
-                f"{printable_hour(current_hour)} battery energy was reduced by {hour_impact:10,.1f} wH and now is {batt_wh_usable:10,.1f} wH."  # noqa: G004
+                f"{printable_hour(current_hour)} battery energy was reduced by {hour_impact:8,.1f} wH and now is {batt_wh_usable:8,.1f} wH."  # noqa: G004
             )
             # Move to next hour
             current_hour = (current_hour + 1) % 24
@@ -439,7 +439,7 @@ class TOUScheduler:
 
         # Calculate additional SOC needed to reach midnight
         logger.debug("Starting base SoC is %s%%", required_soc)
-        logger.debug("Hour: PV - Shading - Load = Net Power | ± SoC = SoC")
+        logger.debug("Hour:    PV - Shade -   Load =  Net Power |  ± SoC =   SoC")
 
         for hour in range(6, 23):
             # Calculate the load for the hour (multiplied by the efficiency factor)
@@ -461,14 +461,7 @@ class TOUScheduler:
             hour_soc = net_power / (self.inverter_api.batt_wh_per_percent or 1)
             required_soc -= int(hour_soc)
             logger.debug(
-                "%s: %4.0f - %5.0f - %4.0f= %6.0f wH  | %2.1f%% = %2.1f%%",
-                printable_hour(hour),
-                hour_pv,
-                hour_shading,
-                hour_load,
-                net_power,
-                hour_soc,
-                required_soc,
+                f"{printable_hour(hour)}: {hour_pv:5,.0f} - {hour_shading:5,.0f} - {hour_load:6,.0f} = {net_power:7,.0f} wH  | {hour_soc:4,.1f}% = {required_soc:4,.0f}%"  # noqa: G004
             )
             current_hour = (current_hour + 1) % 24
         # Add SOC reserved desired at midnight
@@ -486,7 +479,7 @@ class TOUScheduler:
             "Adjusting to have the minimum starting SoC, SoC changes to %.0f%%",
             self.grid_boost_starting_soc,
         )
-        logger.debug("---------Done calculating grid boost SoC---------")
+        logger.debug("-------------Done calculating grid boost SoC-------------")
 
         # Log the grid boost SOC
         logger.info(
