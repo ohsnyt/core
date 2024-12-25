@@ -550,7 +550,7 @@ def printable_hour(hour: int) -> str:
 
     """
     return (
-        f"{'\u00a0' if ((hour%13 < 10) and hour > 0) else ''}"
+        f"{'\u00a0' if ((hour%12 < 10) and hour%12 > 0) else ''}"
         f"{(hour % 12) or 12}"
         f"{'am' if hour < 12 else 'pm'}"
     )
