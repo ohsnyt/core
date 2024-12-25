@@ -399,12 +399,8 @@ class TOUScheduler:
             batt_wh_usable = int(max(0, batt_wh_usable - hour_impact))
             # Monitor progress
             logger.debug(
-                "%s battery energy was reduced by %.0f wH and now is %.0f wH.",
-                printable_hour(current_hour),
-                hour_impact,
-                batt_wh_usable,
+                f"{printable_hour(current_hour)} battery energy was reduced by {hour_impact:10,.1f} wH and now is {batt_wh_usable:10,.1f} wH."  # noqa: G004
             )
-
             # Move to next hour
             current_hour = (current_hour + 1) % 24
             if current_hour == 0:
