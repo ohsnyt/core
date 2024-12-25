@@ -6,7 +6,6 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 import json
 import logging
-from math import ceil
 from zoneinfo import ZoneInfo
 
 import aiofiles
@@ -23,7 +22,6 @@ from .const import (
     DEFAULT_GRID_BOOST_ON,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
-    DEFAULT_INVERTER_EFFICIENCY,
     DEFAULT_SOLCAST_UPDATE_HOURS,
     GRID_BOOST_HISTORY,
     GRID_BOOST_MIDNIGHT_SOC,
@@ -63,9 +61,6 @@ class TOUScheduler:
         self.solcast_api: SolcastAPI = SolcastAPI()
         self.solcast_api_key: str | None = None
         self.solcast_resource_id: str | None = None
-
-        # Here is the pv estimate info
-        self.pv_estimate: dict[str, float] = {}
 
         # Here is the shading info: default to 0.0 for each hour of the day and no last update date
         self.daily_shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
@@ -356,51 +351,54 @@ class TOUScheduler:
             )
             return
 
-        # Get the current hour
+        # For each hour going forward, we need to calculate how long the battery will last until completely exhausted.
+        # Set initial variables
         now = datetime.now(ZoneInfo(self.inverter_api.timezone))
         current_day = now.date()
-        current_hour = now.hour
-
-        # Get the current usable battery power
+        current_hour: int = now.hour
+        starting_time = datetime.now(ZoneInfo(self.inverter_api.timezone)).strftime(
+            "%a %-I %p"
+        )
         batt_wh_usable = self.inverter_api.batt_wh_usable or 0
-
-        # For each hour going forward, we need to calculate how long the battery will last until completely exhausted.
         minutes = 0
+        efficiency = 100 / (self.inverter_api.efficiency or 95)
+        boost_min_wh = self.inverter_api.grid_boost_wh_min or 0
+        # During the grid boost range we can't go below the grid boost SoC amount.
         boost_range = range(
             int(self.grid_boost_start.split(":", maxsplit=1)[0]),
             int(self.inverter_api.grid_boost_end.split(":", maxsplit=1)[0]),
         )
 
         # Log for debugging
-        logger.debug("Calculating remaining battery time")
+        logger.debug("------- Calculating remaining battery time -------")
+        logger.debug(
+            "Starting at %s with %s wH usable energy.",
+            printable_hour(current_hour),
+            batt_wh_usable,
+        )
 
-        while batt_wh_usable and batt_wh_usable > 0:
-            # Calculate battery life remaining
-            hour_impact = int(
-                self.daily_load_averages.get(current_hour, 1000)
-                / ((self.inverter_api.efficiency or DEFAULT_INVERTER_EFFICIENCY) / 100)
+        while batt_wh_usable > 0:
+            # Subtract load, add PV generation, subtract shading for the hour
+            load = self.daily_load_averages.get(current_hour, 1000) / efficiency
+            pv_forecast = self.solcast_api.forecast.get(
+                f"{current_day}-{current_hour}", (0.0, 0.0)
             )
-            key = f"{current_day}-{current_hour}"
-            hour_impact += int(
-                self.pv_estimate.get(key, 0.0)
-                * (1 - self.daily_shading.get(current_hour, 0.0))
-            )
-
+            pv = pv_forecast[0] if isinstance(pv_forecast, tuple) else pv_forecast
+            shading = self.daily_shading.get(current_hour, 0.0)
+            hour_impact = load + pv - pv * shading
             # Check if we are inside the grid boost hours. If so, we can't go below the grid boost amount
-            if current_hour in boost_range and self.grid_boost_on == ON:
-                if (batt_wh_usable - hour_impact) < (
-                    self.inverter_api.grid_boost_wh_min or 0
-                ):
-                    hour_impact += (self.inverter_api.grid_boost_wh_min or 0) - (
-                        batt_wh_usable - hour_impact
-                    )
-
+            if (
+                current_hour in boost_range
+                and self.grid_boost_on == ON
+                and (batt_wh_usable - hour_impact) < boost_min_wh
+            ):
+                hour_impact += boost_min_wh - batt_wh_usable - hour_impact
             # Update battery life calculations.
             minutes += int(min(1, (batt_wh_usable / (hour_impact or 1))) * 60)
-            batt_wh_usable = max(0, batt_wh_usable - hour_impact)
-
+            batt_wh_usable = int(max(0, batt_wh_usable - hour_impact))
+            # Monitor progress
             logger.debug(
-                "At %s battery energy was reduced by %s wH and now is %s wH.",
+                "%s battery energy was reduced by %.0f wH and now is %.0f wH.",
                 printable_hour(current_hour),
                 hour_impact,
                 batt_wh_usable,
@@ -412,45 +410,76 @@ class TOUScheduler:
                 current_day = current_day + timedelta(days=1)
 
         self.batt_minutes_remaining = minutes
-        logger.debug("Battery life remaining is %s hours.", round(minutes / 60, 1))
+        logger.info(
+            "%s: %.1f remaining hours of battery life.",
+            starting_time,
+            round(minutes / 60, 1),
+        )
 
         # DONE WITH CALCULATING BATTERY LIFE IN MINUTES
-        # Calculate SOC required for grid boost
+        # Calculate SOC required for grid boost for tomorrow
         # Initialize variables
         self.grid_boost_starting_soc = 25
-        current_soc = 0
-        current_hour = now.hour
+        required_soc = self.grid_boost_starting_soc
+        tomorrow = now.date() + timedelta(days=1)
+
+        logger.debug(
+            "--------- Calculating grid boost SoC for %s ---------",
+            tomorrow.strftime("%A"),
+        )
 
         # Calculate additional SOC needed to reach midnight
-        if current_hour > 0:
-            for hour in range(current_hour - 1, 23):
-                current_soc += ceil(
-                    self.daily_load_averages[hour]
-                    * 1
-                    / (self.inverter_api.efficiency or 1)
-                    / (self.inverter_api.batt_wh_per_percent or 1)
-                )
-                current_hour = (current_hour + 1) % 24
-        # Add SOC for last hour of day
-        current_soc += ceil(
-            self.daily_load_averages[23]
-            * 1
-            / (self.inverter_api.efficiency or 1)
-            / (self.inverter_api.batt_wh_per_percent or 1)
-        )
+        logger.debug("Starting base SoC is %s%%", required_soc)
+        logger.debug("Hour: PV - Shading - Load = Net Power | ± SoC = SoC")
+
+        for hour in range(6, 23):
+            # Calculate the load for the hour (multiplied by the efficiency factor)
+            hour_load = self.daily_load_averages.get(int(hour), 1000) * efficiency
+            hour_pv_forecast = self.solcast_api.forecast.get(
+                f"{tomorrow}-{current_hour}", 0.0
+            )
+            hour_pv = (
+                hour_pv_forecast[0] * 1000
+                if isinstance(hour_pv_forecast, tuple)
+                else hour_pv_forecast * 1000
+            )
+            hour_shading = self.daily_shading.get(hour, 0.0)
+            hour_net_pv = hour_pv - hour_pv * (hour_shading)
+            net_power = hour_net_pv - hour_load
+            hour_soc = net_power / (self.inverter_api.batt_wh_per_percent or 1)
+            required_soc -= int(hour_soc)
+            logger.debug(
+                "%s: %4.0f - %5.0f - %4.0f= %6.0f wH  | %2.1f%% = %2.1f%%",
+                printable_hour(hour),
+                hour_pv,
+                hour_shading,
+                hour_load,
+                net_power,
+                hour_soc,
+                required_soc,
+            )
+            current_hour = (current_hour + 1) % 24
         # Add SOC reserved desired at midnight
-        current_soc += self.data.data.get(
+        required_soc += self.data.data.get(
             GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
         )
+        # Prevent required SoC from going above 100%
+        required_soc = min(100, required_soc)
 
         # Make sure we start with the minimum morning SoC
-        self.grid_boost_starting_soc = max(DEFAULT_GRID_BOOST_STARTING_SOC, current_soc)
+        self.grid_boost_starting_soc = max(
+            DEFAULT_GRID_BOOST_STARTING_SOC, required_soc
+        )
+        logger.debug(
+            "Adjusting to have the minimum starting SoC, SoC changes to %.0f%%",
+            self.grid_boost_starting_soc,
+        )
+        logger.debug("---------Done calculating grid boost SoC---------")
 
         # Log the grid boost SOC
         logger.info(
-            "Grid boost SoC required to still have %s%% at midnight is %s%%, but setting to %s%%.",
+            "Grid boost SoC required to still have %s%% at midnight is %.0f%%.",
             self.inverter_api.grid_boost_midnight_soc,
-            current_soc,
             self.grid_boost_starting_soc,
         )
 
@@ -521,7 +550,7 @@ def printable_hour(hour: int) -> str:
 
     """
     return (
-        f"{'\u00a0' if (hour%12 < 10 and hour > 0) else ''}"
+        f"{'\u00a0' if ((hour%13 < 10) and hour > 0) else ''}"
         f"{(hour % 12) or 12}"
         f"{'am' if hour < 12 else 'pm'}"
     )

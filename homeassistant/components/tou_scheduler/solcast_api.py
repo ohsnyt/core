@@ -225,8 +225,8 @@ class SolcastAPI:
         # Create a dictionary with the local date and hour (yyyy-mm-dd-h) as the key and target_pv and is_full_sun as the value list
         self.forecast = {
             f"{row['period_end'].date()}-{row['period_end'].hour}": (
-                row["target_pv"],
-                row["sun_ratio"],
+                0.0 if pd.isna(row["target_pv"]) else row["target_pv"],
+                0.0 if pd.isna(row["sun_ratio"]) else row["sun_ratio"],
             )
             for _, row in df.iterrows()
         }  # All done
