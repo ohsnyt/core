@@ -275,6 +275,7 @@ class TOUScheduler:
                     self._shading_file, "w", encoding="utf-8"
                 ) as file:
                     await file.write(json.dumps(self.daily_shading))
+        self._current_hour = datetime.now().hour
 
     async def _calculate_load_estimates(self) -> None:
         """Calculate the daily load averages once a day."""
