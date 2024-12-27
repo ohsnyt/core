@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 
-from .config_flow import TouSchedulerOptionFlow
 from .const import DOMAIN, PLATFORMS
 from .coordinator import TOUUpdateCoordinator
 from .solark_inverter_api import InverterAPI
@@ -90,9 +88,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
 
     return unload_ok
-
-
-@callback
-def async_get_options_flow(config_entry: ConfigEntry) -> config_entries.OptionsFlow:
-    """Get the options flow."""
-    return TouSchedulerOptionFlow(config_entry)
