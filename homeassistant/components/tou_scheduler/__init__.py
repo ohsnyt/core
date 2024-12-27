@@ -11,10 +11,10 @@ from homeassistant.helpers.typing import ConfigType
 
 from .config_flow import TouSchedulerOptionFlow
 from .const import DOMAIN, PLATFORMS
+from .coordinator import TOUUpdateCoordinator
 from .solark_inverter_api import InverterAPI
 from .solcast_api import SolcastAPI
 from .tou_scheduler import TOUScheduler
-from .tou_update_coordinator import TOUUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the TOU Scheduler integration."""
     _LOGGER.info("Setting up TOU Scheduler integration")
     # Perform any global setup here if needed
-
+    _LOGGER.debug("TOU Scheduler integration setup complete (NOTHING TO DO)")
     return True
 
 

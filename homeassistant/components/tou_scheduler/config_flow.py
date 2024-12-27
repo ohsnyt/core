@@ -52,8 +52,8 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if self.username and self.password:
                 timezone = self.hass.config.time_zone or "UTC"
                 temp_inverter_api = InverterAPI(self.username, self.password, timezone)
-                plant_id = await temp_inverter_api.test_authenticate()
-                if plant_id is not None:
+                result = await temp_inverter_api.test_authenticate()
+                if result:
                     # We have successfully logged in. Move to the next step.
                     return await self.async_step_solcast_api()
                 # If we get here, the login failed. Try to authenticate again.
@@ -122,7 +122,9 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="parameters",
             data_schema=vol.Schema(
                 {
-                    vol.Required("boost"): vol.In(["automated", "manual"]),
+                    vol.Required("boost"): vol.In(
+                        ["automated", "manual", "off", "testing"]
+                    ),
                     # Manual Settings
                     vol.Required("manual_boost_soc", default=55): vol.All(
                         vol.Coerce(int), vol.Range(min=5, max=100)

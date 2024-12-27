@@ -9,7 +9,7 @@ DOMAIN = "tou_scheduler"
 PLATFORMS = [Platform.SENSOR]
 # Version of the Tou Scheduler integration
 VERSION = "0.5.0"
-MANUFACTURER = "Oh Snyt"
+# MANUFACTURER = "Oh Snyt"
 
 # Turn on integration detailed debugging logging (True)
 DEBUGGING = True

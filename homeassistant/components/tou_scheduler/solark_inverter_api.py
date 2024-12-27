@@ -174,14 +174,7 @@ class InverterAPI:
             return False
 
         logger.debug("Authenticating to the Sol-Ark cloud")
-        # Prepare the headers for the session
-        headers = {
-            "Content-type": "application/json",
-            "Accept": "application/json",
-            "Authorization": "",
-        }
-        # Create the session
-        self._session = ClientSession(headers=headers)
+
         # Prepare the payload for the login
         payload = {
             "username": self.username,
@@ -190,27 +183,27 @@ class InverterAPI:
             "client_id": "csp-web",
         }
 
-        try:
-            # Await the response from the cloud
-            response = await self._session.post(
-                self._urls["auth"], json=payload, timeout=TIMEOUT
-            )
-            # Get the data from the response
-            response_data = await response.json()
-            # If the response is not OK, log the error and invalidate the session
-            if response_data.get("code") != 0:
-                logger.error(
-                    response_data.get(
-                        "Test authentication failed to get a valid response"
-                    )
+        async with ClientSession() as session:
+            try:
+                # Await the response from the cloud
+                response = await session.post(
+                    self._urls["auth"], json=payload, timeout=TIMEOUT
                 )
+                # Get the data from the response
+                response_data = await response.json()
+                # If the response is not OK, log the error and invalidate the session
+                if response_data.get("code") != 0:
+                    logger.error(
+                        response_data.get(
+                            "Test authentication failed to get a valid response"
+                        )
+                    )
+                    self.cloud_status = Cloud_Status.UNKNOWN
+                    return False
+            except HTTPError as err:
+                logger.error("HTTP error: %s", err)
                 self.cloud_status = Cloud_Status.UNKNOWN
                 return False
-        except HTTPError as err:
-            logger.error("HTTP error: %s", err)
-            self.cloud_status = Cloud_Status.UNKNOWN
-            self._session = None
-            return False
 
         return True
 
@@ -482,6 +475,11 @@ class InverterAPI:
         """Set the inverter setting for Time of Use block 1, State of Charge as per the supplied directive."""
 
         logger.debug("Pretending to set grid boost SoC setting")
+        logger.debug(
+            "Grid boost is %s with the state of charge set to: %s",
+            boost,
+            self._grid_boost_starting_soc,
+        )
         # logger.debug("Writing grid boost SoC setting")
         # Set the inverter settings for Time of Use block 1, State of Charge
         body = {}
@@ -498,10 +496,12 @@ class InverterAPI:
         elif boost == "off":
             body["cap1"] = "0"
             body["time1on"] = "off"
-
-        logger.debug(
-            "Grid boost is %s with the state of charge set to: %s", boost, body["cap1"]
-        )
+        elif boost == "testing":
+            logger.debug("We are just testing the grid boost settings")
+            return
+        else:
+            logger.error("Invalid grid boost setting: %s", boost)
+            return
 
         # TESTING ONLY
         # if self._urls.get("write_settings"):
