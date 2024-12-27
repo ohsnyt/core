@@ -12,24 +12,14 @@ import aiofiles
 import pandas as pd
 
 from homeassistant.components.recorder import get_instance, statistics
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
     DEBUGGING,
     DEFAULT_GRID_BOOST_HISTORY,
     DEFAULT_GRID_BOOST_MIDNIGHT_SOC,
-    DEFAULT_GRID_BOOST_ON,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
-    DEFAULT_SOLCAST_UPDATE_HOURS,
-    GRID_BOOST_HISTORY,
-    GRID_BOOST_MIDNIGHT_SOC,
-    GRID_BOOST_ON,
-    ON,
-    SOLCAST_API_KEY,
-    SOLCAST_RESOURCE_ID,
-    SOLCAST_UPDATE_HOURS,
 )
 from .solark_inverter_api import InverterAPI
 from .solcast_api import SolcastAPI
@@ -44,23 +34,27 @@ else:
 class TOUScheduler:
     """Class to manage Time of Use (TOU) scheduling for Home Assistant."""
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        timezone: str,
+        inverter_api: InverterAPI,
+        solcast_api: SolcastAPI,
+    ) -> None:
         """Initialize the TOU Scheduler."""
         self.hass = hass
-        self.data = entry
-        self.timezone = hass.config.time_zone or "UTC"
+        self.timezone = timezone
         self.status = "Starting"
+        self._tou_update_hour = datetime.now(ZoneInfo(self.timezone)).hour
 
         # Here is the inverter info
-        self.inverter_api: InverterAPI = InverterAPI()
+        self.inverter_api: InverterAPI = inverter_api
         self.load_estimates: dict[str, dict[int, float]] = {}
         self.load_estimates_updated: date | None = None
         self.daily_load_averages: dict[int, float] = {}
 
         # Here is the solcast info
-        self.solcast_api: SolcastAPI = SolcastAPI()
-        self.solcast_api_key: str | None = None
-        self.solcast_resource_id: str | None = None
+        self.solcast_api: SolcastAPI = solcast_api
 
         # Here is the shading info: default to 0.0 for each hour of the day and no last update date
         self.daily_shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
@@ -74,9 +68,10 @@ class TOUScheduler:
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
         self.grid_boost_starting_soc: int = DEFAULT_GRID_BOOST_STARTING_SOC
-        self._grid_boost_recalc_hour: int = datetime.now().hour
+        self.min_battery_soc: int = DEFAULT_GRID_BOOST_MIDNIGHT_SOC
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
-        self.grid_boost_on: str = DEFAULT_GRID_BOOST_ON
+        self._boost: str = "testing"
+        self.days_of_load_history: int = DEFAULT_GRID_BOOST_HISTORY
 
     def to_dict(self) -> dict[str, float | str]:
         """Return this sensor data as a dictionary.
@@ -102,13 +97,12 @@ class TOUScheduler:
             "batt_time": self.batt_minutes_remaining / 60,
             "grid_boost_soc": self.grid_boost_starting_soc,
             "grid_boost_start": self.grid_boost_start,
-            "grid_boost_on": self.grid_boost_on,
+            "grid_boost_on": self._boost,
             "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
             # Inverter data
             "data_updated": self.inverter_api.data_updated
             if self.inverter_api.data_updated
             else "unknown",
-            "cloud_name": self.inverter_api.cloud_name,
             "batt_wh_usable": self.inverter_api.batt_wh_usable or "0",
             "batt_soc": self.inverter_api.realtime_battery_soc,
             "power_battery": self.inverter_api.realtime_battery_power,
@@ -127,7 +121,6 @@ class TOUScheduler:
             if self.inverter_api.plant_created
             else "unknown",
             "plant_name": self.inverter_api.plant_name or "unknown",
-            "plant_status": str(self.inverter_api.plant_status),
             "bearer_token_expires_on": str(
                 self.inverter_api.bearer_token_expires_on.date()
                 if self.inverter_api.bearer_token_expires_on
@@ -138,60 +131,14 @@ class TOUScheduler:
             "load": str(self.daily_load_averages),
         }
 
-    async def async_start(self) -> None:
-        """Start the TOU Scheduler, making sure the inverter api and solcast api authenticate."""
-        # First get the configuration entry data for authentication and setup
-        entry_data = self.data.data
-        # Set the timezone here, in the inverter_api, and solcast_api
-        self.timezone = self.hass.config.time_zone or "UTC"
-        self.inverter_api.timezone = self.timezone
-        self.solcast_api.timezone = self.timezone
-
-        # Setup the inverter api
-        inverter_username = entry_data.get("username")
-        inverter_password = entry_data.get("password")
-        if inverter_username is None or inverter_password is None:
-            logger.error("Inverter username or password is missing")
-            return
-        self.inverter_api.username = inverter_username
-        self.inverter_api.password = inverter_password
-        result = await self.inverter_api.authenticate()
-        if result is False:
-            logger.error("Inverter authentication failed")
-            return
-        result = await self.inverter_api.get_plant()
-        if result is None:
-            logger.error("Inverter plant data not found")
-            return
-
-        # Setup the solcast api
-        api_key = entry_data.get(SOLCAST_API_KEY)
-        resource_id = entry_data.get(SOLCAST_RESOURCE_ID)
-        if api_key is None or resource_id is None:
-            logger.error("Solcast API key or resource ID is missing")
-            return
-        self.solcast_api.api_key = api_key
-        self.solcast_api.resource_id = resource_id
-        self.inverter_api.grid_boost_midnight_soc = entry_data.get(
-            GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
-        )
-        self.inverter_api.grid_boost_starting_soc = 25
-        self.grid_boost_on = entry_data.get(GRID_BOOST_ON, DEFAULT_GRID_BOOST_ON)
-        self.solcast_api.update_hours = entry_data.get(
-            SOLCAST_UPDATE_HOURS, DEFAULT_SOLCAST_UPDATE_HOURS
-        )
-        # TEMP
-        self.solcast_api.update_hours = [23]
-
-        # Set status to indicate we are ready to work
-        self.status = "Working"
-        # Go get the data for the sensors
-        await self.update_sensors()
-
     async def update_sensors(self) -> dict[str, int | float | str]:
         """Update the sensors with the latest data and return the updated sensor data as a dictionary."""
+        # Set status to indicate we are working - May not be needed
+        self.status = "Working"
+
         # Update the inverter data for the sensors (done every 5 minutes)
         #   (This must be done first because the other updates depend on current inverter data, especially at startup)
+
         await self.inverter_api.refresh_data()
 
         # Check if we need to update the Solcast data (startup and as per user schedule)
@@ -209,6 +156,18 @@ class TOUScheduler:
 
         # Return the updated sensor data
         return self.to_dict()
+
+    async def async_update_options(self, user_input: dict) -> None:
+        """Update the options and process the changes."""
+        self.min_battery_soc = user_input.get("min_battery_soc", 25)
+        self.grid_boost_starting_soc = 25
+        self._boost = user_input.get("boost_mode", "testing")
+        self.solcast_api.update_hours = user_input.get("forecast_hours", [23])
+        self.days_of_load_history = user_input.get("history_days", 3)
+        self.grid_boost_starting_soc = user_input.get("min_battery_soc", 10)
+        self.inverter_api.manual_boost_soc = user_input.get("manual_boost_soc", 0)
+
+        await self.update_sensors()
 
     async def _calculate_shading(self) -> None:
         """Calculate the shading each hour.
@@ -292,13 +251,10 @@ class TOUScheduler:
         ):
             return
 
-        days_of_load_history = int(
-            self.data.data.get(GRID_BOOST_HISTORY, DEFAULT_GRID_BOOST_HISTORY)
-        )
         sensor = f"sensor.{self.inverter_api.plant_id}_tou_power_load"
         load_entity_ids = {sensor}
         history_data = await self._request_ha_statistics(
-            load_entity_ids, days_of_load_history
+            load_entity_ids, self.days_of_load_history
         )
 
         data = []
@@ -348,7 +304,7 @@ class TOUScheduler:
         """
 
         # Don't repeat if we already did it this hour
-        if self._grid_boost_recalc_hour != datetime.now().hour:
+        if self._tou_update_hour != datetime.now(ZoneInfo(self.timezone)).hour:
             return
 
         # For each hour going forward, we need to calculate how long the battery will last until completely exhausted.
@@ -391,7 +347,6 @@ class TOUScheduler:
             # Check if we are inside the grid boost hours. If so, we can't go below the grid boost amount
             if (
                 current_hour in boost_range
-                and self.grid_boost_on == ON
                 and (batt_wh_usable - hour_impact) < boost_min_wh
             ):
                 hour_impact += boost_min_wh - batt_wh_usable - hour_impact
@@ -423,7 +378,12 @@ class TOUScheduler:
         """
 
         # Don't repeat if we already did it this hour
-        if self._grid_boost_recalc_hour != datetime.now().hour:
+        if self._tou_update_hour != datetime.now(ZoneInfo(self.timezone)).hour:
+            logger.debug(
+                "This hour is %s. Don't recalculate until %s.",
+                datetime.now(ZoneInfo(self.timezone)).hour,
+                self._tou_update_hour,
+            )
             return
 
         # Calculate SOC required for grid boost for tomorrow
@@ -431,7 +391,7 @@ class TOUScheduler:
         self.grid_boost_starting_soc = 25
         required_soc = self.grid_boost_starting_soc
         tomorrow = datetime.now().date() + timedelta(days=1)
-        current_hour: int = datetime.now().hour
+        current_hour: int = datetime.now(ZoneInfo(self.timezone)).hour
 
         logger.debug(
             "--------- Calculating grid boost SoC for %s ---------",
@@ -466,11 +426,9 @@ class TOUScheduler:
             )
             current_hour = (current_hour + 1) % 24
         # Add SOC reserved desired at midnight
-        required_soc += self.data.data.get(
-            GRID_BOOST_MIDNIGHT_SOC, DEFAULT_GRID_BOOST_MIDNIGHT_SOC
-        )
+        required_soc += self.min_battery_soc
         # Prevent required SoC from going above 100%
-        required_soc = min(100, required_soc)
+        required_soc = min(100, self.min_battery_soc, required_soc)
 
         # Make sure we start with the minimum morning SoC
         self.grid_boost_starting_soc = max(
@@ -485,11 +443,13 @@ class TOUScheduler:
         # Log the grid boost SOC
         logger.info(
             "Grid boost SoC required to still have %s%% at midnight is %.0f%%.",
-            self.inverter_api.grid_boost_midnight_soc,
+            self.min_battery_soc,
             self.grid_boost_starting_soc,
         )
         # Reset the recalc hour variable
-        self._grid_boost_recalc_hour = datetime.now().hour
+        self._tou_update_hour = datetime.now(ZoneInfo(self.timezone)).hour
+        # Write the new grid boost SoC to the inverter
+        await self.inverter_api.write_grid_boost_soc(self._boost)
 
     async def _request_ha_statistics(
         self, entity_ids: set[str], days: int

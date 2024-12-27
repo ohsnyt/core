@@ -41,7 +41,7 @@ else:
 class SolcastAPI:
     """Class to handle Solcast API calls and data processing for the Time of Use integration."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str, resource_id: str, timezone: str) -> None:
         """Initialize key variables for API calls and data calculations.
 
         Args:
@@ -53,40 +53,41 @@ class SolcastAPI:
 
         """
         # General info
-        self._api_key: str | None = None
-        self._resource_id: str | None = None
-        self.timezone: str = "America/Chicago"
+        self._api_key: str = api_key
+        self._resource_id: str = resource_id
+        self.timezone: str = timezone
+
         self.status = SolcastStatus.UNKNOWN
         self.data_updated: datetime | None = None
         # forecast is a dictionary of kWh hourly estimates with the date/hour as the key and the value as a tuple of float and bool.
         self.forecast: dict[str, tuple[float, float]] = {}
         self.energy_production_tomorrow = 0.0
         self.percentile = DEFAULT_SOLCAST_PERCENTILE
-        self._update_hours = DEFAULT_SOLCAST_UPDATE_HOURS
+        self.update_hours = DEFAULT_SOLCAST_UPDATE_HOURS
 
         # Initialize the path to the data files
         module_dir = os.path.dirname(os.path.abspath(__file__))
         self.raw_filepath = os.path.join(module_dir, "solcast_raw.data")
 
-    @property
-    def api_key(self) -> str | None:
-        """Return the Solcast API key."""
-        return self._api_key
+    # @property
+    # def api_key(self) -> str | None:
+    #     """Return the Solcast API key."""
+    #     return self._api_key
 
-    @api_key.setter
-    def api_key(self, value: str) -> None:
-        """Set the Solcast API key."""
-        self._api_key = value
+    # @api_key.setter
+    # def api_key(self, value: str) -> None:
+    #     """Set the Solcast API key."""
+    #     self._api_key = value
 
-    @property
-    def resource_id(self) -> str | None:
-        """Return the Solcast resource ID."""
-        return self._resource_id
+    # @property
+    # def resource_id(self) -> str | None:
+    #     """Return the Solcast resource ID."""
+    #     return self._resource_id
 
-    @resource_id.setter
-    def resource_id(self, value: str) -> None:
-        """Set the Solcast resource ID."""
-        self._resource_id = value
+    # @resource_id.setter
+    # def resource_id(self, value: str) -> None:
+    #     """Set the Solcast resource ID."""
+    #     self._resource_id = value
 
     @property
     def update_hours(self) -> list[int]:

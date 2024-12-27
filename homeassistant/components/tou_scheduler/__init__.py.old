@@ -1,0 +1,180 @@
+"""The Time of Use Scheduler integration."""
+
+from __future__ import annotations
+
+import logging
+
+from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
+
+from .config_flow import TouSchedulerOptionFlow
+from .const import DOMAIN, PLATFORMS
+from .coordinator import TOUUpdateCoordinator
+from .inverter_api import InverterAPI
+from .solcast_api import SolcastAPI
+from .tou_scheduler import TOUScheduler
+
+_LOGGER = logging.getLogger(__name__)
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+async def async_setup_entry(hass: HomeAssistant, entry: config_entries.ConfigEntry) -> bool:
+    """Set up TOU Scheduler coordinator from a config entry."""
+    _LOGGER.info("Setting up TOU Scheduler entry: %s", entry.entry_id)
+    try:
+        _LOGGER.info("Doing async_setup_entry")
+        timezone = self.hass.config.time_zone or "UTC"
+        # Create the Inverter_API.
+        username = self.entry.data.get("username")
+        password = self.entry.data.get("password")
+        inverter_api = InverterAPI(username, password, timezone)
+        if not await inverter_api.authenticate():
+            return False
+        if not await inverter_api.get_plant():
+            return False
+        # Store the TOU inverter_api in hass.data[DOMAIN]
+        self.hass.data[DOMAIN][self.entry.entry_id]["inverter_api"] = inverter_api
+        # Create the Solcast_API.
+        api_key = self.entry.data.get("api_key")
+        resource_id = self.entry.data.get("resource_id")
+        solcast_api = SolcastAPI(api_key, resource_id, timezone)
+        self.solcast_api = solcast_api
+        self.solcast_api.update_hours = [23]
+        # Store the TOU solcast_api in hass.data[DOMAIN]
+        self.hass.data[DOMAIN][self.entry.entry_id]["solcast_api"] = solcast_api
+        # Create the TOU Scheduler
+        tou_scheduler = TOUScheduler(self.hass, self.entry)
+        # Store the TOU Scheduler in hass.data[DOMAIN]
+        self.hass.data[DOMAIN][self.entry.entry_id]["tou_scheduler"] = tou_scheduler
+        # Create the UpdateCoordinator.
+        coordinator = TOUUpdateCoordinator(
+            hass=self.hass,
+            entry=self.entry,
+        )
+        await coordinator.async_start()
+        await coordinator.async_config_entry_first_refresh()
+        # Store the coordinator in hass.data[DOMAIN]
+        self.hass.data.setdefault(DOMAIN, {})[self.entry.entry_id]["coordinator"] = coordinator
+        await coordinator.async_start()
+        await coordinator.async_config_entry_first_refresh()
+        # Forward the setup to the sensor platform
+        await self.hass.config_entries.async_forward_entry_setups(self.entry, PLATFORMS)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: config_entries.ConfigEntry) -> bool:
+    """Unload a config entry."""
+    hass.data.pop(DOMAIN)
+    return True
+
+class TOUSchedulerIntegration:
+    """Main integration class for TOU Scheduler."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize the TOU Scheduler integration."""
+        self.hass = hass
+        self.entry = entry
+        self.inverter_api = None
+        self.solcast_api = None
+        self.tou_scheduler = None
+
+
+    async def async_setup(self) -> bool:
+        """Set up the needed components from the config entry.
+
+        We need these components:
+          an interface to the inverter api to get plant data and set the inverter time of use settings,
+          an interface to the solcast api to get the pv generation forecast data,
+          a scheduler to calculate how much off-peak energy is needed to charge inverter batteries basded on pv forecast data,
+          a coordinator to regularly update data, sensors, and write the time of use settings to the inverter.
+        """
+        try:
+            _LOGGER.info("Doing async_setup_entry")
+            timezone = self.hass.config.time_zone or "UTC"
+            # Create the Inverter_API.
+            username = self.entry.data.get("username")
+            password = self.entry.data.get("password")
+            inverter_api = InverterAPI(username, password, timezone)
+            if not await inverter_api.authenticate():
+                return False
+            if not await inverter_api.get_plant():
+                return False
+            # Store the TOU inverter_api in hass.data[DOMAIN]
+            self.hass.data[DOMAIN][self.entry.entry_id]["inverter_api"] = inverter_api
+
+            # Create the Solcast_API.
+            api_key = self.entry.data.get("api_key")
+            resource_id = self.entry.data.get("resource_id")
+            solcast_api = SolcastAPI(api_key, resource_id, timezone)
+            self.solcast_api = solcast_api
+            self.solcast_api.update_hours = [23]
+            # Store the TOU solcast_api in hass.data[DOMAIN]
+            self.hass.data[DOMAIN][self.entry.entry_id]["solcast_api"] = solcast_api
+
+            # Create the TOU Scheduler
+            tou_scheduler = TOUScheduler(self.hass, self.entry)
+            # Store the TOU Scheduler in hass.data[DOMAIN]
+            self.hass.data[DOMAIN][self.entry.entry_id]["tou_scheduler"] = tou_scheduler
+
+            # Create the UpdateCoordinator.
+            coordinator = TOUUpdateCoordinator(
+                hass=self.hass,
+                entry=self.entry,
+            )
+            await coordinator.async_start()
+            await coordinator.async_config_entry_first_refresh()
+            # Store the coordinator in hass.data[DOMAIN]
+            self.hass.data.setdefault(DOMAIN, {})[self.entry.entry_id]["coordinator"] = coordinator
+
+            await coordinator.async_start()
+            await coordinator.async_config_entry_first_refresh()
+
+            # Forward the setup to the sensor platform
+            await self.hass.config_entries.async_forward_entry_setups(self.entry, PLATFORMS)
+
+        except Exception as e:
+            _LOGGER.error("Error creating initial hass entries for the coordinator and tou_scheduler: %s", e)
+            return False
+
+        _LOGGER.debug("Now start the TOU Scheduler, making sure the inverter api and solcast api authenticate")
+
+        # Set the timezone here, in the inverter_api, and solcast_api
+        timezone = self.hass.config.time_zone or "UTC"
+        tou_scheduler.timezone = timezone
+        tou_scheduler.inverter_api.timezone = timezone
+        tou_scheduler.solcast_api.timezone = timezone
+
+        return True
+
+    async def async_unload_entry(self, hass: HomeAssistant, entry: ConfigEntry) -> bool:
+        """Unload the config entry."""
+        _LOGGER.info("Unloading TOU Scheduler entry: %s", entry.entry_id)
+        try:
+            unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            if unload_ok:
+                hass.data[DOMAIN].pop(entry.entry_id)
+        except Exception as e:
+            _LOGGER.error("Error unloading TOU Scheduler entry: %s", e)
+            return False
+
+        return unload_ok
+
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
+        """Get the options flow."""
+        return TouSchedulerOptionFlow(config_entry)
+
+    async def async_update_options(self, user_input: dict) -> None:
+        """Update the options and process the changes."""
+        self.entry.options = user_input
+        self.inverter_api.grid_boost_midnight_soc = user_input.get(
+            "grid_boost_midnight_soc", 25
+        )
+        self.inverter_api.grid_boost_starting_soc = 25
+        self.inverter_api.boost = user_input.get("boost_mode", "testing")
+        self.solcast_api.update_hours = user_input.get(
+            "solcast_update_hours", [23]
+        )

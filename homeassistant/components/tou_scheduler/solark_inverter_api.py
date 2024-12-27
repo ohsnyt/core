@@ -1,9 +1,5 @@
 """Contains the classes for a Sol-Ark Cloud data integration."""
 
-from __future__ import annotations
-
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from enum import Enum
 import json
@@ -12,23 +8,19 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from aiohttp import ClientSession
+from dateutil.relativedelta import relativedelta
 from requests.exceptions import HTTPError, RequestException, Timeout
-
-from homeassistant.config_entries import ConfigEntry
 
 from .const import (
     API_URL,
-    CLOUD_UPDATE_INTERVAL,
     CLOUD_URL,
     DEBUGGING,
     DEFAULT_BATTERY_SHUTDOWN,
+    DEFAULT_GRID_BOOST,
     DEFAULT_GRID_BOOST_END,
-    DEFAULT_GRID_BOOST_MIDNIGHT_SOC,
-    DEFAULT_GRID_BOOST_ON,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
     DEFAULT_INVERTER_EFFICIENCY,
-    OFF,
     TIMEOUT,
 )
 
@@ -48,28 +40,22 @@ class InverterAPI:
     It requires a username and password to authenticate to the cloud. This will return false if the authentication fails.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, username: str, password: str, timezone: str) -> None:
         """Sol-Ark data cloud object."""
 
         logger.debug("Instantiating a Sol-Ark data cloud object")
         # General cloud info
-        self.cloud_name = "MySolark Data"
         self.cloud_status = Cloud_Status.UNKNOWN
         self.data_updated: str = ""
-        self.urls = {
+        self._urls = {
             "auth": CLOUD_URL + "/oauth/token",
             "plant_list": API_URL + "plants?page=1&limit=10&name=&status=",
             "inverter_list": CLOUD_URL
             + "/api/v1/inverters?page=1&limit=10&type=-1&status=1",
             # Other urls will be added later after the plant is selected
         }
-        self.user_id: str | None = None
-        self._username: str | None = None
-        self._password: str | None = None
-
-        # Home Assistant stuff needed to set up listener after configuration is done
-        self.config_entry: ConfigEntry | None = None
-        self.config_entry_id: str | None = None
+        self._username: str = username
+        self._password: str = password
 
         # Here is the session info we use to communicate with the cloud
         self._headers = {
@@ -87,19 +73,21 @@ class InverterAPI:
         self.plant_created: datetime | None = None
         self.plant_id: str | None = None
         self.efficiency: float = DEFAULT_INVERTER_EFFICIENCY
+        self._efficiency_update_month = (
+            datetime.now(ZoneInfo(timezone)) - relativedelta(months=1)
+        ).month
         self.plant_name: str | None = None
-        self.plant_status: Plant = Plant.UNKNOWN
-        self.timezone: str = "UTC"
+        self.timezone: str = timezone
         # Here is the inverter info
         self.inverter_model: str | None = None
         self.inverter_serial_number: str | None = None
         self.inverter_status: Inverter = Inverter.UNKNOWN
         # Here is the TOU boost info we will monitor and update
-        self.grid_boost_starting_soc: int = DEFAULT_GRID_BOOST_STARTING_SOC
-        self.grid_boost_midnight_soc: int = DEFAULT_GRID_BOOST_MIDNIGHT_SOC
+        self._grid_boost_starting_soc: int = DEFAULT_GRID_BOOST_STARTING_SOC
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
         self.grid_boost_end: str = DEFAULT_GRID_BOOST_END
-        self.grid_boost_on: str = DEFAULT_GRID_BOOST_ON
+        self.boost: str = DEFAULT_GRID_BOOST
+        self.manual_boost_soc: int = 0
 
         # Here is the battery info
         self.batt_wh_usable: int = 0  # Current battery charge in Wh
@@ -118,10 +106,6 @@ class InverterAPI:
 
         # self.batt_soc: float = 0.0
         self._batt_wh_max_est: float = 0.0
-
-        # Items used to calculate the total efficiency once a month
-        self.executor = ThreadPoolExecutor(max_workers=1)
-        self.schedule_efficiency_calculation()
 
     @property
     def username(self) -> str | None:
@@ -161,36 +145,74 @@ class InverterAPI:
         - `read_settings`: Reads the current settings of the inverter.
         - `write_settings`: Writes new settings to the inverter.
         """
-        self.urls["flow"] = (
+        self._urls["flow"] = (
             CLOUD_URL + "/api/v1/plant/energy/" + f"{self.plant_id}/flow"
         )
-        self.urls["read_settings"] = (
+        self._urls["read_settings"] = (
             CLOUD_URL + f"/api/v1/common/setting/{self.inverter_serial_number}/read"
         )
-        self.urls["write_settings"] = (
+        self._urls["write_settings"] = (
             CLOUD_URL + f"/api/v1/common/setting/{self.inverter_serial_number}/set"
         )
         prefix = CLOUD_URL + "/api/v1/inverter/"
-        self.urls["battery"] = (
+        self._urls["battery"] = (
             prefix
             + f"battery/{self.inverter_serial_number}/realtime?sn={self.inverter_serial_number}&lan=en"
         )
-        self.urls["pv"] = prefix + f"{self.inverter_serial_number}/realtime/input"
-        self.urls["grid"] = (
+        self._urls["pv"] = prefix + f"{self.inverter_serial_number}/realtime/input"
+        self._urls["grid"] = (
             prefix
             + f"grid/{self.inverter_serial_number}/realtime?sn={self.inverter_serial_number}&lan=en"
         )
-        self.urls["load"] = prefix + f"load/{self.inverter_serial_number}/realtime"
+        self._urls["load"] = prefix + f"load/{self.inverter_serial_number}/realtime"
 
-    async def test_authenticate(self) -> str | None:
+    async def test_authenticate(self) -> bool:
         """Authenticate to the Sol-Ark cloud for config_flow. Return list of plants or None."""
-        await self.authenticate()
-        result = await self.get_plant()
-        if self._session:
-            await self._session.close()
-        if result:
-            return self.plant_id
-        return None
+        # If we don't have a username or password, we can't authenticate
+        if not (self.username and self.password):
+            logger.error("Cannot authenticate: No username or password")
+            return False
+
+        logger.debug("Authenticating to the Sol-Ark cloud")
+        # Prepare the headers for the session
+        headers = {
+            "Content-type": "application/json",
+            "Accept": "application/json",
+            "Authorization": "",
+        }
+        # Create the session
+        self._session = ClientSession(headers=headers)
+        # Prepare the payload for the login
+        payload = {
+            "username": self.username,
+            "password": self.password,
+            "grant_type": "password",
+            "client_id": "csp-web",
+        }
+
+        try:
+            # Await the response from the cloud
+            response = await self._session.post(
+                self._urls["auth"], json=payload, timeout=TIMEOUT
+            )
+            # Get the data from the response
+            response_data = await response.json()
+            # If the response is not OK, log the error and invalidate the session
+            if response_data.get("code") != 0:
+                logger.error(
+                    response_data.get(
+                        "Test authentication failed to get a valid response"
+                    )
+                )
+                self.cloud_status = Cloud_Status.UNKNOWN
+                return False
+        except HTTPError as err:
+            logger.error("HTTP error: %s", err)
+            self.cloud_status = Cloud_Status.UNKNOWN
+            self._session = None
+            return False
+
+        return True
 
     async def authenticate(self) -> bool:
         """Authenticate to the Sol-Ark cloud. Creates and holds a session."""
@@ -229,7 +251,7 @@ class InverterAPI:
         try:
             # Await the response from the cloud
             response = await self._session.post(
-                self.urls["auth"], json=payload, timeout=TIMEOUT
+                self._urls["auth"], json=payload, timeout=TIMEOUT
             )
             # Get the data from the response
             response_data = await response.json()
@@ -266,16 +288,15 @@ class InverterAPI:
         # Authentication was successful
         self.cloud_status = Cloud_Status.ONLINE
 
-        # Start a background task to get the efficienty of the system
+        # Get the plant info, returning true if successful
+        return await self._get_plant()
 
-        return True
-
-    async def get_plant(self) -> bool:
+    async def _get_plant(self) -> bool:
         """Get the plant info, returning true if successful."""
 
         logger.debug("Getting plant info")
         try:
-            data = await self._request("GET", self.urls["plant_list"], body={})
+            data = await self._request("GET", self._urls["plant_list"], body={})
             if data is None:
                 return False
         except (HTTPError, RequestException, Timeout) as e:
@@ -287,21 +308,23 @@ class InverterAPI:
             self.plant_name = infos[0].get("name", None)
             self.plant_id = infos[0].get("id", None)
             self.plant_address = infos[0].get("address", None)
-            self.plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
+            plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
             created_date = infos[0].get("createAt", None)
             if created_date:
                 self.plant_created = datetime.fromisoformat(created_date)
 
+        logger.debug("Plant status is: %s", plant_status)
+
         # With the plant info, go get the plant inverter serial number
-        await self.get_inverter_sn()
+        await self._get_inverter_sn()
         # Calculate the total efficiency
         await self._calculate_total_efficiency()
         return True
 
-    async def get_inverter_sn(self) -> bool:
+    async def _get_inverter_sn(self) -> bool:
         """Get the inverter SN and build API endpoints. Done once at the end of get_plant."""
 
-        data = await self._request("GET", self.urls["inverter_list"], body={})
+        data = await self._request("GET", self._urls["inverter_list"], body={})
         # If we don't have any details, we can't continue. Log an error and force reauthentication.
         if data is None:
             logger.error("Unable to get inverter list")
@@ -319,7 +342,7 @@ class InverterAPI:
 
         # NOTE: We assume the master is inverter 0, store that inverter as the master
         self.inverter_serial_number = inverter_list[0]["sn"]
-        self.inverter_model = self.convert_inverter_model(inverter_list[0]["model"])
+        self.inverter_model = self._convert_inverter_model(inverter_list[0]["model"])
         self.inverter_status = Inverter(
             inverter_list[0].get("status", Inverter.UNKNOWN)
         )
@@ -330,6 +353,9 @@ class InverterAPI:
 
     async def refresh_data(self) -> None:
         """Update statistics on this plant's various components and return them as a dict."""
+        # Update efficiency once a month
+        await self._calculate_total_efficiency()
+
         # Get the realtime stats for this plant, raising an exception if there is a problem
         await self._read_settings()
         await self._update_flow()
@@ -343,16 +369,16 @@ class InverterAPI:
         """Get statistics on this plant's flow."""
         logger.debug("Updating realtime power flow data")
         # Double check the validity of the cloud session.
-        data = await self._request("GET", self.urls["flow"], body={})
+        data = await self._request("GET", self._urls["flow"], body={})
         if data is None:
             logger.error("Unable to update realtime power flow information")
             return
 
-        self.realtime_battery_soc = self.safe_get(data, "soc")
-        self.realtime_battery_power = self.safe_get(data, "battPower")
-        self.realtime_load_power = self.safe_get(data, "loadOrEpsPower")
-        self.realtime_grid_power = self.safe_get(data, "gridOrMeterPower")
-        self.realtime_pv_power = self.safe_get(data, "pvPower")
+        self.realtime_battery_soc = self._safe_get(data, "soc")
+        self.realtime_battery_power = self._safe_get(data, "battPower")
+        self.realtime_load_power = self._safe_get(data, "loadOrEpsPower")
+        self.realtime_grid_power = self._safe_get(data, "gridOrMeterPower")
+        self.realtime_pv_power = self._safe_get(data, "pvPower")
 
         # Calculate the current usable battery charge in Wh
         self.batt_wh_usable = int(
@@ -364,28 +390,16 @@ class InverterAPI:
             "%a %I:%M %p"
         )
 
-    def schedule_efficiency_calculation(self):
-        """Schedule the efficiency calculation to run once a month."""
-        loop = asyncio.get_running_loop()
-        now = datetime.now()
-        # Schedule the task to run on the first day of the next month
-        next_month = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
-        delay = (next_month - now).total_seconds()
-        loop.call_later(
-            delay, lambda: asyncio.create_task(self._run_efficiency_calculation())
-        )
-
-    async def _run_efficiency_calculation(self):
-        await asyncio.to_thread(self._calculate_total_efficiency)
-        # Reschedule the task to run again next month
-        self.schedule_efficiency_calculation()
-
     async def _calculate_total_efficiency(self) -> None:
         """Calculate the long term (total) power efficiency."""
 
-        # Get totals for battery, PV, Grid, and Load
+        # Only calculate the total efficiency once a month
+        if datetime.now(ZoneInfo(self.timezone)).month == self._efficiency_update_month:
+            return
+
+        # Get totals for battery, PV, Grid, and Load from MySolark data cloud
         logger.debug("Getting battery totals")
-        data = await self._request("GET", self.urls["battery"], body={})
+        data = await self._request("GET", self._urls["battery"], body={})
         if data is None:
             logger.error("Unable to update battery information")
             return
@@ -394,30 +408,31 @@ class InverterAPI:
         self._batt_wh_max_est = int(float(data.get("capacity", 0)) * 48)
 
         logger.debug("Getting PV totals")
-        data = await self._request("GET", self.urls["pv"], body={})
+        data = await self._request("GET", self._urls["pv"], body={})
         if data is None:
             logger.error("Unable to update PV information")
             return
         total_pv = float(data.get("etotal", 0.0))
 
         logger.debug("Getting grid totals")
-        data = await self._request("GET", self.urls["grid"], body={})
+        data = await self._request("GET", self._urls["grid"], body={})
         if data is None:
             logger.error("Unable to update grid information")
             return
         total_grid_import_buy = float(data.get("etotalFrom", 0))
 
         logger.debug("Getting load totals")
-        data = await self._request("GET", self.urls["load"], body={})
+        data = await self._request("GET", self._urls["load"], body={})
         if data is None:
             logger.error("Unable to update load information")
             return
         total_load = float(data.get("totalUsed", 0.0))
 
+        # Calculate the total power source and the total power efficiency
         total_source = (
             total_pv + total_grid_import_buy + total_batt_discharge - total_batt_charge
         )
-        # Prevent divide by zero. Only set the total efficiency if we have a valid source
+        # Prevent divide by zero. Only set the total efficiency if we had any power from the sources
         if (total_source) > 0:
             efficiency = round((total_load / total_source), 2)
         else:
@@ -425,35 +440,37 @@ class InverterAPI:
         logger.info("Total power efficiency is %.0f", efficiency * 100)
         self.efficiency = efficiency
 
+        # Update the month we last calculated the total efficiency
+        self._efficiency_update_month = datetime.now(ZoneInfo(self.timezone)).month
+
     async def _read_settings(self) -> dict[str, Any]:
         """Read the inverter settings and set self values."""
         logger.debug("Reading inverter settings")
 
         # Create a settings dict to return (whether we get the settings or not)
         settings: dict[str, Any] = {}
-        data = await self._request("GET", self.urls["read_settings"], body={})
+        data = await self._request("GET", self._urls["read_settings"], body={})
 
         if data is None:
             logger.error("Unable to update load information")
             return settings
 
         if data is not None:
-            self.grid_boost_starting_soc = int(self.safe_get(data, "cap1"))
+            self._grid_boost_starting_soc = int(self._safe_get(data, "cap1"))
             self.grid_boost_start = data.get("sellTime1", DEFAULT_GRID_BOOST_START)
             self.grid_boost_end = data.get("sellTime2", DEFAULT_GRID_BOOST_END)
-            self.grid_boost_on = data.get("time1on", OFF)
-            batt_capacity_ah = self.safe_get(data, "batteryCap")
-            self.batt_shutdown = int(self.safe_get(data, "batteryShutdownCap"))
-            batt_float_voltage = self.safe_get(data, "floatVolt")
+            batt_capacity_ah = self._safe_get(data, "batteryCap")
+            self.batt_shutdown = int(self._safe_get(data, "batteryShutdownCap"))
+            batt_float_voltage = self._safe_get(data, "floatVolt")
             self.batt_wh_per_percent = batt_capacity_ah * batt_float_voltage / 100
 
             self.grid_boost_wh_min = int(
-                self.batt_wh_per_percent * self.grid_boost_starting_soc
+                self.batt_wh_per_percent * self._grid_boost_starting_soc
             )
 
         return settings
 
-    def safe_get(self, data: dict[str, Any], key: str, default: float = 0.0) -> float:
+    def _safe_get(self, data: dict[str, Any], key: str, default: float = 0.0) -> float:
         """Convert a value to float safely, returning the default value if the value is None or cannot be converted."""
         try:
             value = data.get(key, default)
@@ -461,30 +478,40 @@ class InverterAPI:
         except (TypeError, ValueError):
             return default
 
-    async def write_grid_boost_soc(self) -> None:
-        """Set the inverter setting for Time of Use block 1, State of Charge."""
+    async def write_grid_boost_soc(self, boost: str) -> None:
+        """Set the inverter setting for Time of Use block 1, State of Charge as per the supplied directive."""
 
-        # Don't write the setting if grid boost is turned off.
-        if self.grid_boost_on == OFF:
-            logger.info("Grid boost is off. Not writing SoC setting")
-            return
-
-        logger.debug("Pretending to grid boost SoC setting")
+        logger.debug("Pretending to set grid boost SoC setting")
         # logger.debug("Writing grid boost SoC setting")
         # Set the inverter settings for Time of Use block 1, State of Charge
         body = {}
-        body["cap1"] = str(self.grid_boost_starting_soc)
         body["sellTime1"] = str(self.grid_boost_start)
-        body["time1on"] = self.grid_boost_on
+        # If we are doing a manual boost, set the SoC to the manual boost value
+        if boost == "manual":
+            body["cap1"] = str(self.manual_boost_soc)
+            body["time1on"] = "on"
+        # If we are doing an automatic boost, set the SoC to the calculated value
+        elif boost == "automatic":
+            body["cap1"] = str(self._grid_boost_starting_soc)
+            body["time1on"] = "on"
+        # If we are turning off the boost, set the SoC to 0
+        elif boost == "off":
+            body["cap1"] = "0"
+            body["time1on"] = "off"
+
+        logger.debug(
+            "Grid boost is %s with the state of charge set to: %s", boost, body["cap1"]
+        )
+
         # TESTING ONLY
-        # if self.urls.get("write_settings"):
+        # if self._urls.get("write_settings"):
         # response = await self._request(
-        # "POST", self.urls["write_settings"], body=body
+        # "POST", self._urls["write_settings"], body=body
         # )
         # if response and response.get("msg", None) == "Success":
         # logger.info(
         # "Grid boost written: %s%% boost is scheduled to start just past midnight",
-        # self.grid_boost_starting_soc,
+        # self._grid_boost_starting_soc,
         # )
         # return
         # logger.error(
@@ -547,13 +574,9 @@ class InverterAPI:
         # Must be a post request. All api post requests return a status dict, so we return the status portion of the response
         return response_data
 
-    def convert_inverter_model(self, value: str) -> str:
+    def _convert_inverter_model(self, value: str) -> str:
         """Convert the inverter model to a more recognizable string."""
         return "Sol-Ark 12K-2P-N" if value == "STROG INV" else value
-
-    def just_after_top_of_hour(self) -> bool:
-        """Return True if the current time is just after the top of the hour."""
-        return datetime.now(ZoneInfo(self.timezone)).minute < CLOUD_UPDATE_INTERVAL
 
 
 class Inverter(Enum):
