@@ -1,5 +1,6 @@
 """Config flow for Time of Use Scheduler."""
 
+from collections.abc import Mapping
 import logging
 from typing import Any
 
@@ -28,6 +29,63 @@ DATA_SCHEMA_STEP_2 = vol.Schema(
         vol.Required("resource_id"): str,
     }
 )
+
+
+# Helper functions to get options from the user
+def int_list_to_string(int_list) -> str:
+    """Convert a list of integers to a string."""
+    return ", ".join(map(str, int_list))
+
+
+def string_to_int_list(string_list) -> list[int]:
+    """Convert a string containing one or more integers into a list of ints."""
+    return [int(i.strip()) for i in string_list.split(",") if i.strip().isdigit()]
+
+
+def validate_update_hours(value):
+    """Validate the update hours list since voluptous cannot work with a list."""
+    hours = string_to_int_list(value)
+    hours.sort()
+    if len(hours) < 1 or len(hours) > 7:
+        raise vol.Invalid("Invalid number of hours (must be between 1 - 6)")
+    for hour in hours:
+        if hour < 0 or hour > 23:
+            raise vol.Invalid("Invalid hour value")
+    # Return back in the same format
+    return int_list_to_string(hours)
+
+
+def get_options_schema(options: Mapping[str, Any]) -> vol.Schema:
+    """Return the options schema."""
+    boost = options.get("boost_mode", "automated")
+    forecast_hours = options.get("forecast_hours", "23")
+    manual_boost_soc = options.get("manual_boost_soc", 50)
+    history_days = options.get("history_days", "7")
+    min_battery_soc = options.get("min_battery_soc", 15)
+    percentile = options.get("percentile", 25)
+
+    return vol.Schema(
+        {
+            vol.Required("boost", default=boost): vol.In(
+                ["automated", "manual", "off", "testing"]
+            ),
+            # Manual Settings
+            vol.Required("manual_boost_soc", default=manual_boost_soc): vol.All(
+                vol.Coerce(int), vol.Range(min=5, max=100)
+            ),
+            # Automated Settings
+            vol.Required("history_days", default=history_days): vol.In(
+                ["1", "2", "3", "4", "5", "6", "7"]
+            ),
+            vol.Required("forecast_hours", default=forecast_hours): str,
+            vol.Required("min_battery_soc", default=min_battery_soc): vol.All(
+                vol.Coerce(int), vol.Range(min=5, max=100)
+            ),
+            vol.Required("percentile", default=percentile): vol.All(
+                vol.Coerce(int), vol.Range(min=10, max=90)
+            ),
+        }
+    )
 
 
 class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -81,7 +139,7 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if solcast.status == SolcastStatus.UNKNOWN:
                     errors["base"] = "invalid_solcast_auth"
                 else:
-                    # If authentication is successful, proceed to the third step
+                    # If authentication is successful, proceed to get the options
                     return await self.async_step_parameters()
             else:
                 errors["base"] = "missing_solcast_credentials"
@@ -94,101 +152,40 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input=None
     ) -> config_entries.ConfigFlowResult:
         """Handle the third step of the config flow."""
+        errors: dict[Any, Any] = {}
         if user_input is not None:
-            # Save the user input and create the config entry
-            return self.async_create_entry(
-                title="TOU Scheduler",
-                data={
-                    "username": self.username,
-                    "password": self.password,
-                    "api_key": self.api_key,
-                    "resource_id": self.resource_id,
-                    "boost": user_input["boost"],
-                    "manual_boost_soc": user_input["manual_boost_soc"],
-                    "history_days": user_input["history_days"],
-                    "forecast_hours": string_to_int_list(user_input["forecast_hours"]),
-                    "min_battery_soc": user_input["min_battery_soc"],
-                    "percentile": user_input["percentile"],
-                },
-            )
+            # Check that the update hours are valid
+            if solcast_hours := user_input.get("forecast_hours"):
+                try:
+                    sorted_hours = validate_update_hours(solcast_hours)
+                    user_input["forecast_hours"] = string_to_int_list(sorted_hours)
+                    solcast_hours = sorted_hours
+                except vol.Invalid as e:
+                    errors["forecast_hours"] = str(e)
 
-        # Try to get the forecast hours from the user input. If it is not there, use the default value.
-        if user_input and user_input["forecast_hours"] is not None:
-            forecast_hours = int_list_to_string(user_input["forecast_hours"])
-        else:
-            forecast_hours = int_list_to_string([23])
+            # Save the user input and create the config entry
+            if not errors:
+                return self.async_create_entry(
+                    title="TOU Scheduler",
+                    data={
+                        "username": self.username,
+                        "password": self.password,
+                        "api_key": self.api_key,
+                        "resource_id": self.resource_id,
+                        "forecast_hours": solcast_hours,
+                        "manual_boost_soc": user_input["manual_boost_soc"],
+                        "history_days": user_input["history_days"],
+                        "min_battery_soc": user_input["min_battery_soc"],
+                        "percentile": user_input["percentile"],
+                        "boost_mode": user_input["boost"],
+                    },
+                )
 
         return self.async_show_form(
             step_id="parameters",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("boost"): vol.In(
-                        ["automated", "manual", "off", "testing"]
-                    ),
-                    # Manual Settings
-                    vol.Required("manual_boost_soc", default=55): vol.All(
-                        vol.Coerce(int), vol.Range(min=5, max=100)
-                    ),
-                    # Automated Settings
-                    vol.Required("history_days"): vol.In(
-                        ["1", "2", "3", "4", "5", "6", "7"]
-                    ),
-                    vol.Required("forecast_hours", default=forecast_hours): str,
-                    vol.Required("min_battery_soc", default=15): vol.All(
-                        vol.Coerce(int), vol.Range(min=5, max=100)
-                    ),
-                    vol.Required("percentile", default=25): vol.All(
-                        vol.Coerce(int), vol.Range(min=10, max=90)
-                    ),
-                }
-            ),
+            data_schema=get_options_schema(user_input or {}),
+            errors=errors,
         )
-
-    # async def old_sync_step_parameters(
-    #     self, user_input=None
-    # ) -> config_entries.ConfigFlowResult:
-    #     """Handle the third step of the config flow."""
-    #     if user_input is not None:
-    #         # Save the user input and create the config entry
-    #         return self.async_create_entry(
-    #             title="TOU Scheduler",
-    #             data={
-    #                 "username": self.username,
-    #                 "password": self.password,
-    #                 "api_key": self.api_key,
-    #                 "resource_id": self.resource_id,
-    #                 "history_days": user_input["history_days"],
-    #                 "forecast_hours": user_input["forecast_hours"],
-    #                 "min_battery_soc": user_input["min_battery_soc"],
-    #                 "percentile": user_input["percentile"],
-    #                 "boost_mode": user_input["boost_mode"],
-    #             },
-    #         )
-
-    #     # Try to get the forecast hours from the user input. If it is not there, use the default value.
-    #     if user_input and user_input["forecast_hours"] is not None:
-    #         forecast_hours = int_list_to_string(user_input["forecast_hours"])
-    #     else:
-    #         forecast_hours = int_list_to_string([23])
-
-    #     return self.async_show_form(
-    #         step_id="parameters",
-    #         data_schema=vol.Schema(
-    #             {
-    #                 vol.Required("boost_mode"): vol.In(["on", "off"]),
-    #                 vol.Required("history_days"): vol.In(
-    #                     ["1", "2", "3", "4", "5", "6", "7"]
-    #                 ),
-    #                 vol.Required("forecast_hours", default=forecast_hours): str,
-    #                 vol.Required("min_battery_soc", default=15): vol.All(
-    #                     vol.Coerce(int), vol.Range(min=5, max=100)
-    #                 ),
-    #                 vol.Required("percentile", default=25): vol.All(
-    #                     vol.Coerce(int), vol.Range(min=10, max=90)
-    #                 ),
-    #             }
-    #         ),
-    #     )
 
     @staticmethod
     @callback
@@ -199,115 +196,42 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return TouSchedulerOptionFlow(config_entry)
 
 
-def int_list_to_string(int_list) -> str:
-    """Convert a list of integers to a string."""
-    return ", ".join(map(str, int_list))
-
-
-def string_to_int_list(string_list) -> list[int]:
-    """Convert a string containing one or more integers into a list of ints."""
-    return [int(i.strip()) for i in string_list.split(",") if i.strip().isdigit()]
-
-
 class TouSchedulerOptionFlow(config_entries.OptionsFlow):
     """Handle TOU Scheduler options."""
 
     def __init__(self, config_entry) -> None:
         """Initialize options flow."""
-        # Do we do anything here?
+        # self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Redo the parameters step of the options flow."""
+        errors: dict[Any, Any] = {}
         if user_input is not None:
-            # Save the user input and update the config entry options
-            return self.async_create_entry(
-                title="",
-                data={
-                    "manual_boost_soc": user_input["manual_boost_soc"],
-                    "history_days": user_input["history_days"],
-                    "forecast_hours": string_to_int_list(user_input["forecast_hours"]),
-                    "min_battery_soc": user_input["min_battery_soc"],
-                    "percentile": user_input["percentile"],
-                    "boost_mode": user_input["boost"],
-                },
-            )
+            # Check that the update hours are valid
+            if solcast_hours := user_input.get("forecast_hours"):
+                try:
+                    sorted_hours = validate_update_hours(solcast_hours)
+                    user_input["forecast_hours"] = string_to_int_list(sorted_hours)
+                    solcast_hours = sorted_hours
+                except vol.Invalid as e:
+                    errors["forecast_hours"] = str(e)
 
-        # Try to get the forecast hours from the user input. If it is not there, use the default value.
-        if user_input and user_input["forecast_hours"] is not None:
-            forecast_hours = int_list_to_string(user_input["forecast_hours"])
-        else:
-            forecast_hours = int_list_to_string([23])
+            # Save the user input and update the config entry options, converting the pseudo list to a list
+            if not errors:
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        "manual_boost_soc": user_input["manual_boost_soc"],
+                        "history_days": user_input["history_days"],
+                        "forecast_hours": solcast_hours,
+                        "min_battery_soc": user_input["min_battery_soc"],
+                        "percentile": user_input["percentile"],
+                        "boost_mode": user_input["boost"],
+                    },
+                )
 
-        options_schema = vol.Schema(
-            {
-                vol.Required("boost"): vol.In(["automated", "manual"]),
-                # Manual Settings
-                vol.Required("manual_boost_soc", default=55): vol.All(
-                    vol.Coerce(int), vol.Range(min=5, max=100)
-                ),
-                # Automated Settings
-                vol.Required("history_days"): vol.In(
-                    ["1", "2", "3", "4", "5", "6", "7"]
-                ),
-                vol.Required("forecast_hours", default=forecast_hours): str,
-                vol.Required("min_battery_soc", default=15): vol.All(
-                    vol.Coerce(int), vol.Range(min=5, max=100)
-                ),
-                vol.Required("percentile", default=25): vol.All(
-                    vol.Coerce(int), vol.Range(min=10, max=90)
-                ),
-            }
+        return self.async_show_form(
+            step_id="init",
+            data_schema=get_options_schema(self.config_entry.options),
+            errors=errors,
         )
-        return self.async_show_form(data_schema=options_schema)
-
-    # async def old_async_step_init(self, user_input=None) -> config_entries.ConfigFlowResult:
-    #     """Redo the parameters step of the options flow."""
-    #     if user_input is not None:
-    #         # Save the user input and update the config entry options
-    #         return self.async_create_entry(
-    #             title="",
-    #             data={
-    #                 "history_days": user_input["history_days"],
-    #                 "forecast_hours": string_to_int_list(user_input["forecast_hours"]),
-    #                 "min_battery_soc": user_input["min_battery_soc"],
-    #                 "percentile": user_input["percentile"],
-    #                 "boost_mode": user_input["boost_mode"],
-    #             },
-    #         )
-
-    #     # Try to get the forecast hours from the user input. If it is not there, use the default value.
-    #     if user_input and user_input["forecast_hours"] is not None:
-    #         forecast_hours = int_list_to_string(user_input["forecast_hours"])
-    #     else:
-    #         forecast_hours = int_list_to_string([23])
-
-    #     options_schema = vol.Schema(
-    #         {
-    #             vol.Required("boost_mode"): vol.In(["on", "off"]),
-    #             vol.Required("history_days"): vol.In(
-    #                 ["1", "2", "3", "4", "5", "6", "7"]
-    #             ),
-    #             vol.Required("forecast_hours", default=forecast_hours): str,
-    #             vol.Required("min_battery_soc", default=15): vol.All(
-    #                 vol.Coerce(int), vol.Range(min=5, max=100)
-    #             ),
-    #             vol.Required("percentile", default=25): vol.All(
-    #                 vol.Coerce(int), vol.Range(min=10, max=90)
-    #             ),
-    #         }
-    #     )
-
-    #     return self.async_show_form(data_schema=options_schema)
-
-
-def validate_update_hours(value):
-    """Validate the update hours list since voluptous cannot work with a list."""
-    hours = string_to_int_list(value)
-    hours.sort()
-    if len(hours) < 1 or len(hours) > 10:
-        raise vol.Invalid("Invalid number of hours (must be between 1 and 10)")
-    for hour in hours:
-        if hour < 0 or hour > 23:
-            raise vol.Invalid("Invalid hour value")
-    # Return back in the same format
-    return int_list_to_string(hours)

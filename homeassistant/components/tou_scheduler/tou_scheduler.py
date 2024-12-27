@@ -93,7 +93,7 @@ class TOUScheduler:
             return {}
 
         return {
-            "status": self.status,
+            "status": self._boost,
             "batt_time": self.batt_minutes_remaining / 60,
             "grid_boost_soc": self.grid_boost_starting_soc,
             "grid_boost_start": self.grid_boost_start,
@@ -389,9 +389,8 @@ class TOUScheduler:
         # Calculate SOC required for grid boost for tomorrow
         # Initialize variables
         self.grid_boost_starting_soc = 25
-        required_soc = self.grid_boost_starting_soc
-        tomorrow = datetime.now().date() + timedelta(days=1)
-        current_hour: int = datetime.now(ZoneInfo(self.timezone)).hour
+        required_soc = float(self.grid_boost_starting_soc)
+        tomorrow = datetime.now(ZoneInfo(self.timezone)).date() + timedelta(days=1)
 
         logger.debug(
             "--------- Calculating grid boost SoC for %s ---------",
@@ -408,9 +407,7 @@ class TOUScheduler:
                 self.daily_load_averages.get(int(hour), 1000)
                 * self.inverter_api.efficiency
             )
-            hour_pv_forecast = self.solcast_api.forecast.get(
-                f"{tomorrow}-{current_hour}", 0.0
-            )
+            hour_pv_forecast = self.solcast_api.forecast.get(f"{tomorrow}-{hour}", 0.0)
             hour_pv = (
                 hour_pv_forecast[0] * 1000
                 if isinstance(hour_pv_forecast, tuple)
@@ -420,20 +417,18 @@ class TOUScheduler:
             hour_net_pv = hour_pv - hour_pv * (hour_shading)
             net_power = hour_net_pv - hour_load
             hour_soc = net_power / (self.inverter_api.batt_wh_per_percent or 1)
-            required_soc -= int(hour_soc)
+            required_soc += hour_soc
             logger.debug(
                 f"{printable_hour(hour)}: {hour_pv:5,.0f} - {hour_shading:5,.0f} - {hour_load:6,.0f} = {net_power:7,.0f} wH  | {hour_soc:4,.1f}% = {required_soc:4,.0f}%"  # noqa: G004
             )
-            current_hour = (current_hour + 1) % 24
         # Add SOC reserved desired at midnight
-        required_soc += self.min_battery_soc
+        required_soc -= self.min_battery_soc
+        soc = round(-required_soc, 0)
         # Prevent required SoC from going above 100%
-        required_soc = min(100, self.min_battery_soc, required_soc)
+        required_soc = min(100, soc)
 
         # Make sure we start with the minimum morning SoC
-        self.grid_boost_starting_soc = max(
-            DEFAULT_GRID_BOOST_STARTING_SOC, required_soc
-        )
+        self.grid_boost_starting_soc = int(max(self.min_battery_soc, soc))
         logger.debug(
             "Adjusting to have the minimum starting SoC, SoC changes to %.0f%%",
             self.grid_boost_starting_soc,
@@ -449,7 +444,9 @@ class TOUScheduler:
         # Reset the recalc hour variable
         self._tou_update_hour = datetime.now(ZoneInfo(self.timezone)).hour
         # Write the new grid boost SoC to the inverter
-        await self.inverter_api.write_grid_boost_soc(self._boost)
+        await self.inverter_api.write_grid_boost_soc(
+            self._boost, self.grid_boost_starting_soc
+        )
 
     async def _request_ha_statistics(
         self, entity_ids: set[str], days: int

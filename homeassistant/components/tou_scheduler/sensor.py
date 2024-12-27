@@ -17,7 +17,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEBUGGING, DOMAIN
-from .coordinator import OhSnytUpdateCoordinator
+from .coordinator import TOUUpdateCoordinator
 from .entity import LoadEntity, ShadingEntity, TOUSchedulerEntity
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ async def async_setup_entry(
     async_add_entities(sensors)
 
 
-class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
+class OhSnytSensor(CoordinatorEntity[TOUUpdateCoordinator], SensorEntity):
     """Representation of a standard sensor."""
 
     has_entity_name = False  # Prevent Home Assistant from generating a friendly name
@@ -168,7 +168,7 @@ class OhSnytSensor(CoordinatorEntity[OhSnytUpdateCoordinator], SensorEntity):
         *,
         entry_id: str,
         parent: str,
-        coordinator: OhSnytUpdateCoordinator,
+        coordinator: TOUUpdateCoordinator,
         description: OhSnytSensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""

@@ -471,15 +471,16 @@ class InverterAPI:
         except (TypeError, ValueError):
             return default
 
-    async def write_grid_boost_soc(self, boost: str) -> None:
+    async def write_grid_boost_soc(self, boost: str, value: int) -> None:
         """Set the inverter setting for Time of Use block 1, State of Charge as per the supplied directive."""
 
-        logger.debug("Pretending to set grid boost SoC setting")
+        logger.debug("+++++++Pretending to set grid boost SoC setting+++++++")
         logger.debug(
             "Grid boost is %s with the state of charge set to: %s",
             boost,
-            self._grid_boost_starting_soc,
+            value,
         )
+        self._grid_boost_starting_soc = value
         # logger.debug("Writing grid boost SoC setting")
         # Set the inverter settings for Time of Use block 1, State of Charge
         body = {}
@@ -490,7 +491,7 @@ class InverterAPI:
             body["time1on"] = "on"
         # If we are doing an automatic boost, set the SoC to the calculated value
         elif boost == "automatic":
-            body["cap1"] = str(self._grid_boost_starting_soc)
+            body["cap1"] = str(value)
             body["time1on"] = "on"
         # If we are turning off the boost, set the SoC to 0
         elif boost == "off":
