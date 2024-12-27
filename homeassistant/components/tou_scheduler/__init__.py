@@ -48,11 +48,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Initialize the TOU Scheduler
         tou_scheduler = TOUScheduler(
             hass=hass,
+            config_entry=entry,
             timezone=hass.config.time_zone,
             inverter_api=inverter_api,
             solcast_api=solcast_api,
         )
-        # await tou_scheduler.update_sensors()
+        await tou_scheduler.async_start()
 
         # Create the UpdateCoordinator
         coordinator = TOUUpdateCoordinator(
@@ -80,6 +81,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the config entry."""
     _LOGGER.info("Unloading TOU Scheduler entry: %s", entry.entry_id)
     try:
+        coordinator = hass.data[DOMAIN].get(entry.entry_id)
+        if coordinator:
+            await coordinator.tou_scheduler.close_session()
         unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         if unload_ok:
             hass.data[DOMAIN].pop(entry.entry_id)

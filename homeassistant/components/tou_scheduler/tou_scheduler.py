@@ -6,12 +6,15 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 import json
 import logging
+from types import MappingProxyType
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import aiofiles
 import pandas as pd
 
 from homeassistant.components.recorder import get_instance, statistics
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -37,12 +40,14 @@ class TOUScheduler:
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: ConfigEntry,
         timezone: str,
         inverter_api: InverterAPI,
         solcast_api: SolcastAPI,
     ) -> None:
         """Initialize the TOU Scheduler."""
         self.hass = hass
+        self.config_entry = config_entry
         self.timezone = timezone
         self.status = "Starting"
         self._tou_update_hour = datetime.now(ZoneInfo(self.timezone)).hour
@@ -157,7 +162,32 @@ class TOUScheduler:
         # Return the updated sensor data
         return self.to_dict()
 
-    async def async_update_options(self, user_input: dict) -> None:
+    async def async_start(self) -> None:
+        """Set up the config options callback when starting the TOU Scheduler."""
+        # Ensure config_entry is set
+        if not self.config_entry:
+            logger.error("Config entry is not set.")
+            return
+
+        # Load the options from the config entry
+        if self.config_entry.options:
+            await self._handle_options_dialog(self.hass, self.config_entry)
+        # Listen for changes to the options and update the cloud object
+        self.config_entry.add_update_listener(self._options_callback)
+
+    async def _handle_options_dialog(
+        self, hass: HomeAssistant, config_entry: ConfigEntry
+    ) -> None:
+        """Handle the options dialog."""
+        # Process the options from the config entry
+        options = config_entry.options
+        logger.debug("Handling options dialog with options: %s", options)
+        # Update the TOU Scheduler with the new options
+        await self._async_update_options(options)
+
+    async def _async_update_options(
+        self, user_input: MappingProxyType[str, Any]
+    ) -> None:
         """Update the options and process the changes."""
         self.min_battery_soc = user_input.get("min_battery_soc", 25)
         self.grid_boost_starting_soc = 25
@@ -168,6 +198,13 @@ class TOUScheduler:
         self.inverter_api.manual_boost_soc = user_input.get("manual_boost_soc", 0)
 
         await self.update_sensors()
+
+    async def _options_callback(
+        self, hass: HomeAssistant, config_entry: ConfigEntry
+    ) -> None:
+        """Handle option updates callback."""
+        logger.debug("Options updated: %s", config_entry.options)
+        await self._handle_options_dialog(hass, config_entry)
 
     async def _calculate_shading(self) -> None:
         """Calculate the shading each hour.

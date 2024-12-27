@@ -7,9 +7,10 @@ import logging
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import aiohttp
 from aiohttp import ClientSession
 from dateutil.relativedelta import relativedelta
-from requests.exceptions import HTTPError, RequestException, Timeout
+from requests.exceptions import HTTPError
 
 from .const import (
     API_URL,
@@ -44,6 +45,20 @@ class InverterAPI:
         """Sol-Ark data cloud object."""
 
         logger.debug("Instantiating a Sol-Ark data cloud object")
+        self._username: str = username
+        self._password: str = password
+        self.timezone: str = timezone
+        self._refresh_token: str | None = None
+        self._bearer_token: str | None = None
+        self.bearer_token_expires_on: datetime = datetime.now(ZoneInfo(timezone))
+
+        # Here is the session headers we use to communicate with the cloud
+        self._headers = {
+            "Content-type": "application/json",
+            "Accept": "application/json",
+            "Authorization": "",
+        }
+
         # General cloud info
         self.cloud_status = Cloud_Status.UNKNOWN
         self.data_updated: str = ""
@@ -54,19 +69,6 @@ class InverterAPI:
             + "/api/v1/inverters?page=1&limit=10&type=-1&status=1",
             # Other urls will be added later after the plant is selected
         }
-        self._username: str = username
-        self._password: str = password
-
-        # Here is the session info we use to communicate with the cloud
-        self._headers = {
-            "Content-type": "application/json",
-            "Accept": "application/json",
-            "Authorization": "",
-        }
-        self._session: ClientSession | None = None
-        self._refresh_token: str | None = None
-        self._bearer_token: str | None = None
-        self.bearer_token_expires_on: datetime | None = None
 
         # Here is the plant info
         self.plant_address: str | None = None
@@ -77,7 +79,6 @@ class InverterAPI:
             datetime.now(ZoneInfo(timezone)) - relativedelta(months=1)
         ).month
         self.plant_name: str | None = None
-        self.timezone: str = timezone
         # Here is the inverter info
         self.inverter_model: str | None = None
         self.inverter_serial_number: str | None = None
@@ -209,140 +210,240 @@ class InverterAPI:
 
     async def authenticate(self) -> bool:
         """Authenticate to the Sol-Ark cloud. Creates and holds a session."""
-        # If we don't have a username or password, we can't authenticate
-        if not (self.username and self.password):
-            logger.error("Cannot authenticate: No username or password")
-            return False
-
-        # If we don't have a refresh token, we need to prepare to create a session and log in
+        # Only called at startup. We call reauthenticate to renew the token.
         logger.debug("Authenticating to the Sol-Ark cloud")
-        if self._session is None:
-            # Prepare the headers for the session
-            headers = {
-                "Content-type": "application/json",
-                "Accept": "application/json",
-                "Authorization": "",
-            }
-            # Create the session
-            self._session = ClientSession(headers=headers)
-            # Prepare the payload for the login
-            payload = {
-                "username": self.username,
-                "password": self.password,
-                "grant_type": "password",
-                "client_id": "csp-web",
-            }
+        # Prepare the payload for the login
+        payload = self._prepare_authorization_payload()
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(
+                    self._urls["auth"], json=payload, timeout=TIMEOUT
+                ) as response:
+                    if response.status == 200:
+                        outer = await response.json()
+                        if outer is None:
+                            logger.error(
+                                "Failed to get a valid response from the authentication request"
+                            )
+                            return False
+                        data = outer.get("data", {})
+                        logger.info("Authenticated with Solark Inverter API")
+                        token = data.get("access_token", "")
+                        session.headers["Authorization"] = f"Bearer {token}"
+                        self._refresh_token = data.get("refresh_token", None)
+                        expires = data.get("expires_in", None)
+                        self.bearer_token_expires_on = (
+                            datetime.now(ZoneInfo(self.timezone))
+                            + timedelta(seconds=expires)
+                            if expires
+                            else datetime.now(ZoneInfo(self.timezone))
+                        )
+                        logger.debug("Getting plant info")
+                        async with session.get(
+                            self._urls["plant_list"],
+                            data=json.dumps({}),
+                            timeout=TIMEOUT,
+                        ) as response:
+                            if response.status == 200:
+                                outer = await response.json()
+                                if outer is None:
+                                    logger.error(
+                                        "Failed to get a valid response from the authentication request"
+                                    )
+                                    return False
+                                data = outer.get("data", {})
+                                infos: list[dict[str, Any]] = data.get("infos", [])
+                                if infos:
+                                    self.plant_name = infos[0].get("name", None)
+                                    self.plant_id = infos[0].get("id", None)
+                                    self.plant_address = infos[0].get("address", None)
+                                    plant_status = Plant(
+                                        infos[0].get("status", Plant.UNKNOWN)
+                                    )
+                                    created_date = infos[0].get("createAt", None)
+                                    if created_date:
+                                        self.plant_created = datetime.fromisoformat(
+                                            created_date
+                                        )
+                                    logger.debug("Plant status is: %s", plant_status)
 
-        # Otherwise just prepare to renew the tokens
-        else:
-            # Prepare the payload for the token renewal
-            payload = {
+                                # With the plant info, go get the plant inverter serial number
+                                async with session.get(
+                                    self._urls["inverter_list"],
+                                    data=json.dumps({}),
+                                    timeout=TIMEOUT,
+                                ) as response:
+                                    if response.status == 200:
+                                        outer = await response.json()
+                                        if outer is None:
+                                            logger.error(
+                                                "Failed to get a valid response from the authentication request"
+                                            )
+                                            return False
+                                        data = outer.get("data", {})
+                                        inverter_list = data.get("infos")
+                                        # If we don't have an inverter list, we can't continue. Log an error and return false.
+                                        if not inverter_list:
+                                            logger.error("No inverters found")
+                                            self.cloud_status = Cloud_Status.UNKNOWN
+                                            return False
+
+                                        # NOTE: We assume the master is inverter 0, store that inverter as the master
+                                        self.inverter_serial_number = inverter_list[0][
+                                            "sn"
+                                        ]
+                                        self.inverter_model = (
+                                            self._convert_inverter_model(
+                                                inverter_list[0]["model"]
+                                            )
+                                        )
+                                        self.inverter_status = Inverter(
+                                            inverter_list[0].get(
+                                                "status", Inverter.UNKNOWN
+                                            )
+                                        )
+                                        # Build the api endpoints needed to get sensor and settings data from the cloud
+                                        self._build_api_endpoints()
+                                        logger.debug(
+                                            "Successfully retrieved the inverter serial number"
+                                        )
+                                        # await self._calculate_total_efficiency()
+                                        return True
+            except aiohttp.ClientConnectorError as e:
+                logger.error("DNS resolution error: %s", e)
+                return False
+        return True
+
+    def _prepare_authorization_payload(self) -> dict[str, Any]:
+        """Prepare the payload for authentication or token renewal."""
+        if self._refresh_token:
+            return {
                 "grant_type": "refresh_token",
-                "refresh_token": self._refresh_token if self._refresh_token else "",
+                "refresh_token": self._refresh_token,
             }
+        return {
+            "username": self.username,
+            "password": self.password,
+            "grant_type": "password",
+            "client_id": "csp-web",
+        }
 
-        try:
-            # Await the response from the cloud
-            response = await self._session.post(
-                self._urls["auth"], json=payload, timeout=TIMEOUT
-            )
-            # Get the data from the response
-            response_data = await response.json()
-            # If the response is not OK, log the error and invalidate the session
-            if response_data.get("code") != 0:
-                logger.error(response_data.get("msg"))
-                self.cloud_status = Cloud_Status.UNKNOWN
-                self._session = None
-                return False
-            # Decode the bearer token, the refresh token and expiration time
-            data: dict[str, Any] | None = response_data.get("data", {})
-            if data:
-                token = data.get("access_token", "")
-                self._session.headers["Authorization"] = f"Bearer {token}"
-                self._refresh_token = data.get("refresh_token", None)
-                expires = data.get("expires_in", None)
-                self.bearer_token_expires_on = (
-                    datetime.now(ZoneInfo(self.timezone)) + timedelta(seconds=expires)
-                    if expires
-                    else None
-                )
-                # If anything is missing, token renewal failed. Log the failure and invalidate the session.
-            if not (token and expires and self._refresh_token):
-                logger.error("Failed to authenticate to the Sol-Ark cloud")
-                self.cloud_status = Cloud_Status.UNKNOWN
-                self._session = None
-                return False
-        except HTTPError as err:
-            logger.error("HTTP error: %s", err)
-            self.cloud_status = Cloud_Status.UNKNOWN
-            self._session = None
+    def _process_response_data(self, response_data: dict[str, Any]) -> bool:
+        """Process the response data from the authentication request."""
+        data = response_data.get("data", {})
+        if not data:
             return False
 
-        # Authentication was successful
+        token = data.get("access_token", "")
+        self._refresh_token = data.get("refresh_token", None)
+        expires = data.get("expires_in", None)
+
+        if not (token and expires and self._refresh_token):
+            return False
+
+        self.bearer_token_expires_on = datetime.now(
+            ZoneInfo(self.timezone)
+        ) + timedelta(seconds=expires)
+        return True
+
+    async def reauthenticate(self) -> bool:
+        """Reauthenticate to the Sol-Ark cloud using the refresh token."""
+        if not self._refresh_token:
+            logger.error("Cannot reauthenticate: No refresh token available")
+            return False
+
+        logger.debug("Reauthenticating to the Sol-Ark cloud")
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": self._refresh_token,
+        }
+
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    self._urls["auth"], json=payload, timeout=TIMEOUT
+                ) as response,
+            ):
+                response_data = await response.json()
+                if response_data.get("code") != 0:
+                    logger.error(
+                        "Reauthentication failed with message: %s, response data: %s",
+                        response_data.get("msg"),
+                        response_data,
+                    )
+                    self.cloud_status = Cloud_Status.UNKNOWN
+                    return False
+                if not self._process_response_data(response_data):
+                    logger.error("Failed to reauthenticate to the Sol-Ark cloud")
+                    self.cloud_status = Cloud_Status.UNKNOWN
+                    return False
+
+        except aiohttp.ClientError as err:
+            logger.error("Request error: %s", err)
+            self.cloud_status = Cloud_Status.UNKNOWN
+            return False
+
         self.cloud_status = Cloud_Status.ONLINE
-
-        # Get the plant info, returning true if successful
-        return await self._get_plant()
-
-    async def _get_plant(self) -> bool:
-        """Get the plant info, returning true if successful."""
-
-        logger.debug("Getting plant info")
-        try:
-            data = await self._request("GET", self._urls["plant_list"], body={})
-            if data is None:
-                return False
-        except (HTTPError, RequestException, Timeout) as e:
-            logger.error("Failed to get plant list: %s", e)
-            return False
-
-        infos: list[dict[str, Any]] = data.get("infos", [])
-        if infos:
-            self.plant_name = infos[0].get("name", None)
-            self.plant_id = infos[0].get("id", None)
-            self.plant_address = infos[0].get("address", None)
-            plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
-            created_date = infos[0].get("createAt", None)
-            if created_date:
-                self.plant_created = datetime.fromisoformat(created_date)
-
-        logger.debug("Plant status is: %s", plant_status)
-
-        # With the plant info, go get the plant inverter serial number
-        await self._get_inverter_sn()
-        # Calculate the total efficiency
-        await self._calculate_total_efficiency()
         return True
 
-    async def _get_inverter_sn(self) -> bool:
-        """Get the inverter SN and build API endpoints. Done once at the end of get_plant."""
+    # async def _get_plant(self) -> bool:
+    #     """Get the plant info, returning true if successful."""
 
-        data = await self._request("GET", self._urls["inverter_list"], body={})
-        # If we don't have any details, we can't continue. Log an error and force reauthentication.
-        if data is None:
-            logger.error("Unable to get inverter list")
-            self.cloud_status = Cloud_Status.UNKNOWN
-            self._session = None
-            return False
+    #     logger.debug("Getting plant info")
+    #     try:
+    #         data = await self._request("GET", self._urls["plant_list"], body={})
+    #         if data is None:
+    #             return False
+    #     except (HTTPError, RequestException, Timeout) as e:
+    #         logger.error("Failed to get plant list: %s", e)
+    #         return False
 
-        inverter_list = data.get("infos")
-        # If we don't have an inverter list, we can't continue. Log an error and return false.
-        if not inverter_list:
-            logger.error("No inverters found")
-            self.cloud_status = Cloud_Status.UNKNOWN
-            self._session = None
-            return False
+    #     infos: list[dict[str, Any]] = data.get("infos", [])
+    #     if infos:
+    #         self.plant_name = infos[0].get("name", None)
+    #         self.plant_id = infos[0].get("id", None)
+    #         self.plant_address = infos[0].get("address", None)
+    #         plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
+    #         created_date = infos[0].get("createAt", None)
+    #         if created_date:
+    #             self.plant_created = datetime.fromisoformat(created_date)
 
-        # NOTE: We assume the master is inverter 0, store that inverter as the master
-        self.inverter_serial_number = inverter_list[0]["sn"]
-        self.inverter_model = self._convert_inverter_model(inverter_list[0]["model"])
-        self.inverter_status = Inverter(
-            inverter_list[0].get("status", Inverter.UNKNOWN)
-        )
-        # Build the api endpoints needed to get sensor and settings data from the cloud
-        self._build_api_endpoints()
-        logger.debug("Successfully retrieved the inverter serial number")
-        return True
+    #     logger.debug("Plant status is: %s", plant_status)
+
+    #     # With the plant info, go get the plant inverter serial number
+    #     await self._get_inverter_sn()
+    #     # Calculate the total efficiency
+    #     await self._calculate_total_efficiency()
+    #     return True
+
+    # async def _get_inverter_sn(self) -> bool:
+    #     """Get the inverter SN and build API endpoints. Done once at the end of get_plant."""
+
+    #     data = await self._request("GET", self._urls["inverter_list"], body={})
+    #     # If we don't have any details, we can't continue. Log an error and force reauthentication.
+    #     if data is None:
+    #         logger.error("Unable to get inverter list")
+    #         self.cloud_status = Cloud_Status.UNKNOWN
+    #         return False
+
+    #     inverter_list = data.get("infos")
+    #     # If we don't have an inverter list, we can't continue. Log an error and return false.
+    #     if not inverter_list:
+    #         logger.error("No inverters found")
+    #         self.cloud_status = Cloud_Status.UNKNOWN
+    #         return False
+
+    #     # NOTE: We assume the master is inverter 0, store that inverter as the master
+    #     self.inverter_serial_number = inverter_list[0]["sn"]
+    #     self.inverter_model = self._convert_inverter_model(inverter_list[0]["model"])
+    #     self.inverter_status = Inverter(
+    #         inverter_list[0].get("status", Inverter.UNKNOWN)
+    #     )
+    #     # Build the api endpoints needed to get sensor and settings data from the cloud
+    #     self._build_api_endpoints()
+    #     logger.debug("Successfully retrieved the inverter serial number")
+    #     return True
 
     async def refresh_data(self) -> None:
         """Update statistics on this plant's various components and return them as a dict."""
@@ -355,8 +456,6 @@ class InverterAPI:
 
         # Report that the cloud status was good
         self.cloud_status = Cloud_Status.ONLINE
-        # logger.info("Dictionary of sensor data returned")
-        # return self.to_dict()
 
     async def _update_flow(self) -> None:
         """Get statistics on this plant's flow."""
@@ -524,55 +623,44 @@ class InverterAPI:
         self, method: str, endpoint: str, body: Any | None
     ) -> dict[str, Any] | None:
         """Send a request to the Sol-Ark cloud and return the data portion of the response."""
-        # If we don't have a session, don't bother trying to send the request
-        if self._session is None:
-            logger.error("Session is not initialized")
-            return None
 
-        # If we don't have a valid bearer token authenticate or die trying
+        # Log the time until we need to reauthenticate
+        time_difference = self.bearer_token_expires_on - datetime.now(
+            ZoneInfo(self.timezone)
+        )
+        days = time_difference.days
+        hours = time_difference.seconds // 3600
+        logger.debug("We need to reauthenticate in %s days and %s hours", days, hours)
+        # Check if we need to reauthenticate
         if (
-            not self.bearer_token_expires_on
-            or self.bearer_token_expires_on <= datetime.now(ZoneInfo(self.timezone))
+            self.bearer_token_expires_on
+            and datetime.now(ZoneInfo(self.timezone)) >= self.bearer_token_expires_on
         ):
-            # Fail if we don't have username and password
-            if not self._username or not self._password:
-                logger.error("Cannot authenticate: No username or password")
-                return None
-            if not await self.authenticate():
-                # If we can't authenticate, we can't send the request
+            logger.debug("Reauthenticating to the Sol-Ark cloud")
+            if not await self.reauthenticate():
+                logger.error("Failed to reauthenticate to the Sol-Ark cloud")
                 return None
 
-        # Go get the data from the cloud
         try:
-            if body:
-                response = await self._session.request(
-                    method, endpoint, data=json.dumps(body), timeout=TIMEOUT
-                )
-            else:
-                response = await self._session.request(
-                    method, endpoint, timeout=TIMEOUT
-                )
-
-            # All api get requests return a data dict, so we return the data portion of the response
-            # response = await thread if thread else None
-            response_data = await response.json() if response else None
-            if method == "GET":
-                return response_data.get("data") if response_data else None
-
-        except HTTPError as errh:
-            logger.error("HTTP Error: %s", errh)
-            return None
-        except ConnectionError as errc:
-            logger.error("Error Connecting:  %s", errc)
-            return None
-        except Timeout as errt:
-            logger.error("Timeout Error:  %s", errt)
-            return None
-        except RequestException as err:
-            logger.error("Something Else:  %s", err)
+            async with (
+                aiohttp.ClientSession() as session,
+                session.request(
+                    method,
+                    endpoint,
+                    data=json.dumps(body) if body else None,
+                    timeout=TIMEOUT,
+                ) as response,
+            ):
+                response_data = await response.json()
+        except aiohttp.ClientError as err:
+            logger.error("Request error: %s", err)
             return None
 
-        # Must be a post request. All api post requests return a status dict, so we return the status portion of the response
+        # For GET requests, return the data portion of the response
+        response_data = await response.json() if response else None
+        if method == "GET":
+            return response_data.get("data") if response_data else None
+        # For POST request, return the status portion of the response
         return response_data
 
     def _convert_inverter_model(self, value: str) -> str:

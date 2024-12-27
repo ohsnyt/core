@@ -36,11 +36,6 @@ class TOUUpdateCoordinator(DataUpdateCoordinator):
         self.entry = entry
         self.tou_scheduler = tou_scheduler
 
-    async def async_start(self):
-        """Start the scheduler."""
-        _LOGGER.info("Starting TOUUpdateCoordinator")
-        # await self.tou_scheduler.async_start()
-
     async def _async_update_data(self):
         """Fetch all data for your sensors here."""
         _LOGGER.debug("Fetching sensor data")
