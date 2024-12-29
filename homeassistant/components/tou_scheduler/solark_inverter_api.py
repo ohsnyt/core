@@ -394,64 +394,6 @@ class InverterAPI:
         self.cloud_status = Cloud_Status.ONLINE
         return True
 
-    # async def _get_plant(self) -> bool:
-    #     """Get the plant info, returning true if successful."""
-
-    #     logger.debug("Getting plant info")
-    #     try:
-    #         data = await self._request("GET", self._urls["plant_list"], body={})
-    #         if data is None:
-    #             return False
-    #     except (HTTPError, RequestException, Timeout) as e:
-    #         logger.error("Failed to get plant list: %s", e)
-    #         return False
-
-    #     infos: list[dict[str, Any]] = data.get("infos", [])
-    #     if infos:
-    #         self.plant_name = infos[0].get("name", None)
-    #         self.plant_id = infos[0].get("id", None)
-    #         self.plant_address = infos[0].get("address", None)
-    #         plant_status = Plant(infos[0].get("status", Plant.UNKNOWN))
-    #         created_date = infos[0].get("createAt", None)
-    #         if created_date:
-    #             self.plant_created = datetime.fromisoformat(created_date)
-
-    #     logger.debug("Plant status is: %s", plant_status)
-
-    #     # With the plant info, go get the plant inverter serial number
-    #     await self._get_inverter_sn()
-    #     # Calculate the total efficiency
-    #     await self._calculate_total_efficiency()
-    #     return True
-
-    # async def _get_inverter_sn(self) -> bool:
-    #     """Get the inverter SN and build API endpoints. Done once at the end of get_plant."""
-
-    #     data = await self._request("GET", self._urls["inverter_list"], body={})
-    #     # If we don't have any details, we can't continue. Log an error and force reauthentication.
-    #     if data is None:
-    #         logger.error("Unable to get inverter list")
-    #         self.cloud_status = Cloud_Status.UNKNOWN
-    #         return False
-
-    #     inverter_list = data.get("infos")
-    #     # If we don't have an inverter list, we can't continue. Log an error and return false.
-    #     if not inverter_list:
-    #         logger.error("No inverters found")
-    #         self.cloud_status = Cloud_Status.UNKNOWN
-    #         return False
-
-    #     # NOTE: We assume the master is inverter 0, store that inverter as the master
-    #     self.inverter_serial_number = inverter_list[0]["sn"]
-    #     self.inverter_model = self._convert_inverter_model(inverter_list[0]["model"])
-    #     self.inverter_status = Inverter(
-    #         inverter_list[0].get("status", Inverter.UNKNOWN)
-    #     )
-    #     # Build the api endpoints needed to get sensor and settings data from the cloud
-    #     self._build_api_endpoints()
-    #     logger.debug("Successfully retrieved the inverter serial number")
-    #     return True
-
     async def refresh_data(self) -> None:
         """Update statistics on this plant's various components and return them as a dict."""
         # Update efficiency once a month

@@ -69,26 +69,6 @@ class SolcastAPI:
         module_dir = os.path.dirname(os.path.abspath(__file__))
         self.raw_filepath = os.path.join(module_dir, "solcast_raw.data")
 
-    # @property
-    # def api_key(self) -> str | None:
-    #     """Return the Solcast API key."""
-    #     return self._api_key
-
-    # @api_key.setter
-    # def api_key(self, value: str) -> None:
-    #     """Set the Solcast API key."""
-    #     self._api_key = value
-
-    # @property
-    # def resource_id(self) -> str | None:
-    #     """Return the Solcast resource ID."""
-    #     return self._resource_id
-
-    # @resource_id.setter
-    # def resource_id(self, value: str) -> None:
-    #     """Set the Solcast resource ID."""
-    #     self._resource_id = value
-
     @property
     def update_hours(self) -> list[int]:
         """Return the hours to update Solcast data."""
@@ -103,11 +83,6 @@ class SolcastAPI:
         """Get the estimate for the current hour PV."""
         current_hour = datetime.now(ZoneInfo(self.timezone)).strftime("%Y-%m-%d-%H")
         # Return the current hour estimate
-        logger.debug(
-            "PV estimate for %s is %s",
-            printable_hour(int(current_hour[-2:])),
-            round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0),
-        )
         return round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0)
 
     def get_current_hour_sun_estimate(self) -> float:
@@ -128,23 +103,19 @@ class SolcastAPI:
         It sets the SolcastStatus appropriately based on the success or failure of the API call and data processing.
         This method populates the forecast dictionary with hourly estimates, updates the energy production for tomorrow,
         and handles damping factors.
-        """
-        # If we don't have a Solcast API key, set the status to not_configured and return.
-        if not (self._api_key and self._resource_id):
-            logger.error(
-                "Either the Solcast API key or resource id is missing in the configuration"
-            )
-            self.status = SolcastStatus.NOT_CONFIGURED
-            return False
 
-        # If we have hourly_forecast data and the hour of self.data_updated is in the self._update_hours list AND self.data_updated is today, return.
+        Returns:
+            bool: True if the data was successfully refreshed, False if we did nothing.
+
+        """
+        # If we have already done the update today for this hour, return.
         if self.data_updated and (
             self.data_updated.hour in self._update_hours
             and self.data_updated.date() == datetime.now(ZoneInfo(self.timezone)).date()
         ):
             return False
 
-        # If self.data_updated is None (startup) and we have hourly_forecast data, and the raw data file has a file date of today, update self.data_updated to the date of the hourly_forceast data.
+        # If we are starting up (self.data_updated is None) and have a raw data file that was created today, update self.data_updated to the date of the hourly_forceast data.
         if self.data_updated is None and os.path.exists(self.raw_filepath):
             file_date = datetime.fromtimestamp(
                 os.path.getmtime(self.raw_filepath), ZoneInfo(self.timezone)
@@ -152,27 +123,24 @@ class SolcastAPI:
             if file_date.date() == datetime.now(ZoneInfo(self.timezone)).date():
                 self.data_updated = file_date
 
-        # Check when we last got data from the API, and refresh if necessary
-        # First check if we have a raw data file and call the api if we don't have one.
-        # Second, compare the date of the file to today. If it isn't today, call the api.
-        # Third, compare the hour of the last update and the current hour to the list of hours to update.
-        # Fourth, if the status is CANNOT_READ, call the api. That only gets set when we can't read the raw data file.
-        if (
+        # Get data from the API only as necessary. This writes a new raw data file. Call the api if:
+        #   ...we don't have a data_updated tim.
+        #   ...we don't have a raw data file.
+        #   ...we do have a raw data file but the data_updated time is older than today.
+        #   ...the current hour is in the update hours and the data_updated time is not the current hour.
+        #   ...we tried to read a raw data file previously but failed.
+        if self.data_updated is None or (
             not os.path.exists(self.raw_filepath)
-            or self.data_updated
-            and self.data_updated.date() < datetime.now(ZoneInfo(self.timezone)).date()
+            or self.data_updated.date() < datetime.now(ZoneInfo(self.timezone)).date()
             or datetime.now(ZoneInfo(self.timezone)).hour in self._update_hours
-            and self.data_updated
             and self.data_updated.hour != datetime.now(ZoneInfo(self.timezone)).hour
             or self.status == SolcastStatus.CANNOT_READ
-            or self.data_updated is None
         ):
             await self._api_call()
             if self.status != SolcastStatus.API_NORMAL:
                 return False
 
-        # We only get here if we have a raw data file and we need to update our data.
-        # First, try to read the raw data file. If we can't, set the status to CANNOT_READ and return.
+        # We have valid data in a raw data file, so read it.
         async with aiofiles.open(self.raw_filepath, encoding="utf-8") as file:
             file_content = await file.read()
             forecasts = json.loads(file_content)
@@ -198,7 +166,7 @@ class SolcastAPI:
             df["period_end"].dt.tz_convert, ZoneInfo(self.timezone)
         )
 
-        # Calculate the target estimate based on linear interpolation
+        # Calculate the user specified target estimate based on linear interpolation
         if self.percentile <= 50:
             df["target_pv"] = df["pv_estimate10"] + (self.percentile - 10) / 40 * (
                 df["pv_estimate"] - df["pv_estimate10"]
@@ -232,6 +200,7 @@ class SolcastAPI:
             for _, row in df.iterrows()
         }  # All done
         self.status = SolcastStatus.API_NORMAL
+        self.data_updated = datetime.now(ZoneInfo(self.timezone))
         return True
 
     async def _api_call(self) -> bool:
