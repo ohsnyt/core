@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 import json
 import logging
+from pathlib import Path
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
@@ -238,17 +239,20 @@ class TOUScheduler:
                     if not shading:
                         logger.info("No shading data available in the file at startup.")
                     else:
-                        self.daily_shading = shading
+                        self.daily_shading = {
+                            int(hour): value for hour, value in shading.items()
+                        }
                         logger.info("Shading file read at startup.")
             except FileNotFoundError:
                 logger.warning("Shading file not found at startup.")
             except json.JSONDecodeError:
                 logger.error("Error decoding shading file at startup.")
+
             # Set the current hour to the current hour of the day and show we have done the startup
-            self._current_hour = datetime.now().hour
+            self._current_hour = datetime.now(ZoneInfo(self.timezone)).hour
             self._shading_startup = False
         # If we are not at the start of a new hour, just record the current PV power generation
-        if self._current_hour == datetime.now().hour:
+        if self._current_hour == datetime.now(ZoneInfo(self.timezone)).hour:
             self._current_hour_pv.append(self.inverter_api.realtime_pv_power)
             return
 
@@ -267,16 +271,22 @@ class TOUScheduler:
                 shading = 1 - min(
                     pv_average / self.solcast_api.get_current_hour_pv_estimate(), 1
                 )
-                self.daily_shading[datetime.now().hour] = shading
+                self.daily_shading[int(datetime.now(ZoneInfo(self.timezone)).hour)] = (
+                    shading
+                )
                 logger.info(
-                    "Shading for %s changed to %s", datetime.now().hour, shading
+                    "Shading for %s changed to %s",
+                    datetime.now(ZoneInfo(self.timezone)).hour,
+                    shading,
                 )
                 # Write the shading to a file
+                shading_file_path = Path(self._shading_file)
+                shading_file_path.parent.mkdir(parents=True, exist_ok=True)
                 async with aiofiles.open(
-                    self._shading_file, "w", encoding="utf-8"
+                    shading_file_path, "w", encoding="utf-8"
                 ) as file:
                     await file.write(json.dumps(self.daily_shading))
-        self._current_hour = datetime.now().hour
+        self._current_hour = datetime.now(ZoneInfo(self.timezone)).hour
 
     async def _calculate_load_estimates(self) -> None:
         """Calculate the daily load averages once a day."""
