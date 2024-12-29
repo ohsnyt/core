@@ -108,6 +108,9 @@ class InverterAPI:
         # self.batt_soc: float = 0.0
         self._batt_wh_max_est: float = 0.0
 
+        # Temporary counter for reauthentication log
+        self._reauth_counter = 0
+
     @property
     def username(self) -> str | None:
         """Return the username."""
@@ -158,6 +161,7 @@ class InverterAPI:
         prefix = CLOUD_URL + "/api/v1/inverter/"
         self._urls["battery"] = (
             prefix
+            # + f"battery/{self.inverter_serial_number}/realtime"
             + f"battery/{self.inverter_serial_number}/realtime?sn={self.inverter_serial_number}&lan=en"
         )
         self._urls["pv"] = prefix + f"{self.inverter_serial_number}/realtime/input"
@@ -191,14 +195,10 @@ class InverterAPI:
                     self._urls["auth"], json=payload, timeout=TIMEOUT
                 )
                 # Get the data from the response
-                response_data = await response.json()
+                response_data = await response.json() if response else None
                 # If the response is not OK, log the error and invalidate the session
-                if response_data.get("code") != 0:
-                    logger.error(
-                        response_data.get(
-                            "Test authentication failed to get a valid response"
-                        )
-                    )
+                if response_data is None or response_data.get("code") != 0:
+                    logger.error("Test authentication failed to get a valid response")
                     self.cloud_status = Cloud_Status.UNKNOWN
                     return False
             except HTTPError as err:
@@ -230,6 +230,7 @@ class InverterAPI:
                         logger.info("Authenticated with Solark Inverter API")
                         token = data.get("access_token", "")
                         session.headers["Authorization"] = f"Bearer {token}"
+                        self._headers["Authorization"] = f"Bearer {token}"
                         self._refresh_token = data.get("refresh_token", None)
                         expires = data.get("expires_in", None)
                         self.bearer_token_expires_on = (
@@ -314,19 +315,22 @@ class InverterAPI:
                 return False
         return True
 
-    def _prepare_authorization_payload(self) -> dict[str, Any]:
+    def _prepare_authorization_payload(self) -> dict[str, str]:
         """Prepare the payload for authentication or token renewal."""
-        if self._refresh_token:
+        if self.username and self.password:
+            if self._refresh_token:
+                return {
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._refresh_token,
+                }
             return {
-                "grant_type": "refresh_token",
-                "refresh_token": self._refresh_token,
+                "username": self.username,
+                "password": self.password,
+                "grant_type": "password",
+                "client_id": "csp-web",
             }
-        return {
-            "username": self.username,
-            "password": self.password,
-            "grant_type": "password",
-            "client_id": "csp-web",
-        }
+        logger.error("Cannot authenticate: No username or password")
+        return {}
 
     def _process_response_data(self, response_data: dict[str, Any]) -> bool:
         """Process the response data from the authentication request."""
@@ -375,7 +379,10 @@ class InverterAPI:
                     self.cloud_status = Cloud_Status.UNKNOWN
                     return False
                 if not self._process_response_data(response_data):
-                    logger.error("Failed to reauthenticate to the Sol-Ark cloud")
+                    logger.error(
+                        "Failed to reauthenticate to the Sol-Ark cloud: %s",
+                        response_data,
+                    )
                     self.cloud_status = Cloud_Status.UNKNOWN
                     return False
 
@@ -476,7 +483,6 @@ class InverterAPI:
         self.batt_wh_usable = int(
             self.batt_wh_per_percent * (self.realtime_battery_soc - self.batt_shutdown)
         )
-        logger.debug("Current battery charge: %s wH", self.batt_wh_usable)
 
         self.data_updated = datetime.now(ZoneInfo(self.timezone)).strftime(
             "%a %I:%M %p"
@@ -589,7 +595,7 @@ class InverterAPI:
             body["cap1"] = str(self.manual_boost_soc)
             body["time1on"] = "on"
         # If we are doing an automatic boost, set the SoC to the calculated value
-        elif boost == "automatic":
+        elif boost == "automated":
             body["cap1"] = str(value)
             body["time1on"] = "on"
         # If we are turning off the boost, set the SoC to 0
@@ -620,17 +626,22 @@ class InverterAPI:
         # )
 
     async def _request(
-        self, method: str, endpoint: str, body: Any | None
+        self, method: str, endpoint: str, body: Any | None = None
     ) -> dict[str, Any] | None:
         """Send a request to the Sol-Ark cloud and return the data portion of the response."""
 
-        # Log the time until we need to reauthenticate
-        time_difference = self.bearer_token_expires_on - datetime.now(
+        # Log the time until we need to reauthenticate if we are between the top of the hour and five minutes before the hour
+        time_remaining = self.bearer_token_expires_on - datetime.now(
             ZoneInfo(self.timezone)
         )
-        days = time_difference.days
-        hours = time_difference.seconds // 3600
-        logger.debug("We need to reauthenticate in %s days and %s hours", days, hours)
+        if self._reauth_counter % 100 == 0 or time_remaining.total_seconds() // 60 < 5:
+            logger.debug(
+                "We need to reauthenticate in %s hours %s minutes",
+                time_remaining.total_seconds() // 3600 % 24,
+                time_remaining.total_seconds() // 60 % 60,
+            )
+        self._reauth_counter += 1
+
         # Check if we need to reauthenticate
         if (
             self.bearer_token_expires_on
@@ -638,30 +649,69 @@ class InverterAPI:
         ):
             logger.debug("Reauthenticating to the Sol-Ark cloud")
             if not await self.reauthenticate():
-                logger.error("Failed to reauthenticate to the Sol-Ark cloud")
+                logger.error(
+                    "Failed to reauthenticate to the Sol-Ark cloud. Doing backup authentication."
+                )
+                # Fallback if reauthentication fails.
+                payload = self._prepare_authorization_payload()
+                async with aiohttp.ClientSession() as session:
+                    try:
+                        async with session.post(
+                            self._urls["auth"], json=payload, timeout=TIMEOUT
+                        ) as response:
+                            if response.status == 200:
+                                outer = await response.json()
+                                if outer is None:
+                                    logger.error(
+                                        "Failed to get a valid response from the authentication request"
+                                    )
+                                    return None
+                                data = outer.get("data", {})
+                                logger.info("Authenticated with Solark Inverter API")
+                                token = data.get("access_token", "")
+                                session.headers["Authorization"] = f"Bearer {token}"
+                                self._headers["Authorization"] = f"Bearer {token}"
+                                self._refresh_token = data.get("refresh_token", None)
+                                expires = data.get("expires_in", None)
+                                self.bearer_token_expires_on = (
+                                    datetime.now(ZoneInfo(self.timezone))
+                                    + timedelta(seconds=expires)
+                                    if expires
+                                    else datetime.now(ZoneInfo(self.timezone))
+                                )
+                    except aiohttp.ClientError as err:
+                        logger.error("Request error: %s", err)
+                        return None
+
+        if method == "GET":
+            return await self._get_request(endpoint)
+        if method == "POST":
+            return await self._post_request(endpoint, body)
+        logger.error("Unsupported HTTP method: %s", method)
+        return None
+
+    async def _get_request(self, endpoint: str) -> dict[str, Any] | None:
+        """Send a GET request to the Sol-Ark cloud and return the data portion of the response."""
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            try:
+                async with session.get(endpoint, timeout=TIMEOUT) as response:
+                    response_data = await response.json() if response else None
+                    return response_data.get("data") if response_data else None
+            except aiohttp.ClientError as err:
+                logger.error("Request error: %s", err)
                 return None
 
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.request(
-                    method,
-                    endpoint,
-                    data=json.dumps(body) if body else None,
-                    timeout=TIMEOUT,
-                ) as response,
-            ):
-                response_data = await response.json()
-        except aiohttp.ClientError as err:
-            logger.error("Request error: %s", err)
-            return None
-
-        # For GET requests, return the data portion of the response
-        response_data = await response.json() if response else None
-        if method == "GET":
-            return response_data.get("data") if response_data else None
-        # For POST request, return the status portion of the response
-        return response_data
+    async def _post_request(self, endpoint: str, body: Any) -> dict[str, Any] | None:
+        """Send a POST request to the Sol-Ark cloud and return the response."""
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            try:
+                async with session.post(
+                    endpoint, json=json.dumps(body), timeout=TIMEOUT
+                ) as response:
+                    return await response.json() if response else None
+            except aiohttp.ClientError as err:
+                logger.error("Request error: %s", err)
+                return None
 
     def _convert_inverter_model(self, value: str) -> str:
         """Convert the inverter model to a more recognizable string."""

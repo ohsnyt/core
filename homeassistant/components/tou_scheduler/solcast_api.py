@@ -121,7 +121,7 @@ class SolcastAPI:
         )
         return self.forecast.get(current_hour, (0.0, 0.0))[1]
 
-    async def refresh_data(self) -> None:
+    async def refresh_data(self) -> bool:
         """Refresh Solcast data.
 
         This method fetches the latest solar forecast data from the Solcast API, processes it, and updates the internal state.
@@ -135,14 +135,14 @@ class SolcastAPI:
                 "Either the Solcast API key or resource id is missing in the configuration"
             )
             self.status = SolcastStatus.NOT_CONFIGURED
-            return
+            return False
 
         # If we have hourly_forecast data and the hour of self.data_updated is in the self._update_hours list AND self.data_updated is today, return.
         if self.data_updated and (
             self.data_updated.hour in self._update_hours
             and self.data_updated.date() == datetime.now(ZoneInfo(self.timezone)).date()
         ):
-            return
+            return False
 
         # If self.data_updated is None (startup) and we have hourly_forecast data, and the raw data file has a file date of today, update self.data_updated to the date of the hourly_forceast data.
         if self.data_updated is None and os.path.exists(self.raw_filepath):
@@ -169,7 +169,7 @@ class SolcastAPI:
         ):
             await self._api_call()
             if self.status != SolcastStatus.API_NORMAL:
-                return
+                return False
 
         # We only get here if we have a raw data file and we need to update our data.
         # First, try to read the raw data file. If we can't, set the status to CANNOT_READ and return.
@@ -179,7 +179,7 @@ class SolcastAPI:
             if not forecasts:
                 logger.error("Unable to read the Solcast raw forecast file")
                 self.status = SolcastStatus.CANNOT_READ
-                return
+                return False
 
         # Convert input data to a DataFrame
         df = pd.DataFrame(forecasts)
@@ -188,7 +188,7 @@ class SolcastAPI:
         if df.empty:
             logger.info("No data available for tomorrow")
             self.status = SolcastStatus.API_FAULT
-            return
+            return False
 
         # Parse the period_end column, assuming the format includes a 'Z' for UTC
         df["period_end"] = pd.to_datetime(df["period_end"], utc=True)
@@ -232,6 +232,7 @@ class SolcastAPI:
             for _, row in df.iterrows()
         }  # All done
         self.status = SolcastStatus.API_NORMAL
+        return True
 
     async def _api_call(self) -> bool:
         """Make the Solcast API call."""

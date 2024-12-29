@@ -191,14 +191,14 @@ class OhSnytSensor(CoordinatorEntity[TOUUpdateCoordinator], SensorEntity):
         self.entity_id = generate_entity_id(
             "sensor.{}", self._attr_unique_id, hass=coordinator.hass
         )
-        logger.debug(
-            "\n++Created sensor: %s. Native value is: %s %s. (entity_id: %s, _attr_unique_id: %s)",
-            self._attr_name,
-            self.native_value,
-            self._attr_native_unit_of_measurement,
-            self.entity_id,
-            self._attr_unique_id,
-        )
+        # logger.debug(
+        #     "\n++Created sensor: %s. Native value is: %s %s. (entity_id: %s, _attr_unique_id: %s)",
+        #     self._attr_name,
+        #     self.native_value,
+        #     self._attr_native_unit_of_measurement,
+        #     self.entity_id,
+        #     self._attr_unique_id,
+        # )
 
     @property
     def name(self) -> str | None:
