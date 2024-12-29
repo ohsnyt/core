@@ -108,6 +108,12 @@ class SolcastAPI:
             bool: True if the data was successfully refreshed, False if we did nothing.
 
         """
+        # If we have already updated, but it isn't the right hour, return.
+        if self.data_updated and (
+            datetime.now(ZoneInfo(self.timezone)).hour not in self._update_hours
+        ):
+            return False
+
         # If we have already done the update today for this hour, return.
         if self.data_updated and (
             self.data_updated.hour in self._update_hours
