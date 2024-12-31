@@ -451,16 +451,14 @@ class TOUScheduler:
 
         # Test this new grid boost SoC to make sure we end up with the minimum SoC at midnight
         # Prepare the final results nicely for the user logs
-        hyphen_format = "{:-^58}"
+        hyphen_format = "{:-^53}"
         logger.info(
             msg=hyphen_format.format(
-                "Off-peak charging for {} starting at {}% SoC",
-                (tomorrow.strftime("%A"), self.grid_boost_starting_soc),
+                f"Off-peak charging for {tomorrow.strftime("%A")} starting at {self.grid_boost_starting_soc}% SoC"
             )
         )
         # Calculate additional SOC needed to reach midnight
-        logger.info("Starting base SoC is %s%%", required_soc)
-        logger.info("Hour:    PV - Shade -   Load =  Net Power  |  ± SoC = SoC")
+        logger.info("Hour:    PV  Shade    Load   Net Power   ± SoC    SoC")
 
         for hour in range(6, 24):
             # Calculate the load for the hour (multiplied by the efficiency factor)
@@ -481,7 +479,7 @@ class TOUScheduler:
             required_soc += hour_soc
             shade = int(round(hour_shading * 100, 2))
             logger.info(
-                f"{printable_hour(hour)}: {hour_pv:5,.0f} - {shade:4d}% - {hour_load:6,.0f} = {net_power:7,.0f} wH  | {hour_soc:4,.1f}% = {required_soc:4,.0f}%"  # noqa: G004
+                f"{printable_hour(hour)}: {hour_pv:5,.0f}  {shade:4d}%  {hour_load:6,.0f}  {net_power:7,.0f} wH   {hour_soc:4,.1f}%  {required_soc:4,.0f}%"  # noqa: G004
             )
         logger.info(msg=hyphen_format.format("Done calculating grid boost SoC"))
 
