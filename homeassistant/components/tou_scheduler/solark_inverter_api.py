@@ -370,7 +370,7 @@ class InverterAPI:
                 ) as response,
             ):
                 response_data = await response.json()
-                if response_data.get("code") != 0:
+                if response_data.get("msg") != "Success":
                     logger.error(
                         "Reauthentication failed with message: %s, response data: %s",
                         response_data.get("msg"),
@@ -378,10 +378,10 @@ class InverterAPI:
                     )
                     self.cloud_status = Cloud_Status.UNKNOWN
                     return False
-                if not self._process_response_data(response_data):
+                data = response_data.get("data", {})
+                if not data:
                     logger.error(
-                        "Failed to reauthenticate to the Sol-Ark cloud: %s",
-                        response_data,
+                        "Failed to get a valid response from the reauthentication request"
                     )
                     self.cloud_status = Cloud_Status.UNKNOWN
                     return False
@@ -587,7 +587,7 @@ class InverterAPI:
         time_remaining = self.bearer_token_expires_on - datetime.now(
             ZoneInfo(self.timezone)
         )
-        if self._reauth_counter % 100 == 0 or time_remaining.total_seconds() // 60 < 5:
+        if self._reauth_counter % 100 == 0 or time_remaining.total_seconds() < 300:
             logger.debug(
                 "We need to reauthenticate in %s hours %s minutes",
                 time_remaining.total_seconds() // 3600 % 24,
@@ -596,10 +596,9 @@ class InverterAPI:
         self._reauth_counter += 1
 
         # Check if we need to reauthenticate
-        if (
-            self.bearer_token_expires_on
-            and datetime.now(ZoneInfo(self.timezone)) >= self.bearer_token_expires_on
-        ):
+        if self.bearer_token_expires_on and datetime.now(
+            ZoneInfo(self.timezone)
+        ) >= self.bearer_token_expires_on - timedelta(hours=1):
             logger.debug("Reauthenticating to the Sol-Ark cloud")
             if not await self.reauthenticate():
                 logger.error(
