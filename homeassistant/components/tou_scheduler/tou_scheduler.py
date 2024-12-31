@@ -391,9 +391,9 @@ class TOUScheduler:
             if hour in boost_range and batt_wh_usable < boost_min_wh:
                 batt_wh_usable = boost_min_wh
             logger.debug(
-                "At %s battery energy is %.0f wH.",
+                "At %s battery energy is %6s wH.",
                 printable_hour((hour + 1) % 24),
-                batt_wh_usable,
+                f"{batt_wh_usable:6,.0f}",
             )
             # Monitor progress
             if batt_wh_usable > 0:
@@ -451,12 +451,13 @@ class TOUScheduler:
 
         # Test this new grid boost SoC to make sure we end up with the minimum SoC at midnight
         # Prepare the final results nicely for the user logs
+        hyphen_format = "{:-^58}"
         logger.info(
-            "------ Calculating grid boost SoC for %s starting at %d%% ------",
-            tomorrow.strftime("%A"),
-            self.grid_boost_starting_soc,
+            msg=hyphen_format.format(
+                "Off-peak charging for {} starting at {}% SoC",
+                (tomorrow.strftime("%A"), self.grid_boost_starting_soc),
+            )
         )
-
         # Calculate additional SOC needed to reach midnight
         logger.info("Starting base SoC is %s%%", required_soc)
         logger.info("Hour:    PV - Shade -   Load =  Net Power  |  ± SoC = SoC")
@@ -482,7 +483,7 @@ class TOUScheduler:
             logger.info(
                 f"{printable_hour(hour)}: {hour_pv:5,.0f} - {shade:4d}% - {hour_load:6,.0f} = {net_power:7,.0f} wH  | {hour_soc:4,.1f}% = {required_soc:4,.0f}%"  # noqa: G004
             )
-        logger.info("-------------Done calculating grid boost SoC-------------")
+        logger.info(msg=hyphen_format.format("Done calculating grid boost SoC"))
 
         # Write the new grid boost SoC to the inverter
         await self.inverter_api.write_grid_boost_soc(
