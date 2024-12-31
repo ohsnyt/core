@@ -424,6 +424,9 @@ class InverterAPI:
             logger.error("Unable to update realtime power flow information")
             return
 
+        if self._safe_get(data, "soc") <= 0:
+            logger.debug("ODD BATTERY SOC: %s ", data)
+            return
         self.realtime_battery_soc = self._safe_get(data, "soc")
         self.realtime_battery_power = self._safe_get(data, "battPower")
         self.realtime_load_power = self._safe_get(data, "loadOrEpsPower")
@@ -434,13 +437,6 @@ class InverterAPI:
         self.batt_wh_usable = int(
             self.batt_wh_per_percent * (self.realtime_battery_soc - self.batt_shutdown)
         )
-        if self.batt_wh_usable < 0:
-            logger.debug(
-                "ODD BATTERY SOC: %.2f. wh/%% = %.2f, shutdown %% = %s ",
-                self.realtime_battery_soc,
-                self.batt_wh_per_percent,
-                self.batt_shutdown,
-            )
 
         self.data_updated = datetime.now(ZoneInfo(self.timezone)).strftime(
             "%a %I:%M %p"
