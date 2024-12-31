@@ -385,14 +385,24 @@ class InverterAPI:
                     )
                     self.cloud_status = Cloud_Status.UNKNOWN
                     return False
+                logger.debug("Reauthentication data is %s", response_data)
+                token = response_data.get("access_token", "")
+                session.headers["Authorization"] = f"Bearer {token}"
+                self._headers["Authorization"] = f"Bearer {token}"
+                self._refresh_token = response_data.get("refresh_token", None)
+                expires = response_data.get("expires_in", None)
+                self.bearer_token_expires_on = (
+                    datetime.now(ZoneInfo(self.timezone)) + timedelta(seconds=expires)
+                    if expires
+                    else datetime.now(ZoneInfo(self.timezone))
+                )
+                self.cloud_status = Cloud_Status.ONLINE
+                return True
 
         except aiohttp.ClientError as err:
             logger.error("Request error: %s", err)
             self.cloud_status = Cloud_Status.UNKNOWN
             return False
-
-        self.cloud_status = Cloud_Status.ONLINE
-        return True
 
     async def refresh_data(self) -> None:
         """Update statistics on this plant's various components and return them as a dict."""
@@ -408,7 +418,6 @@ class InverterAPI:
 
     async def _update_flow(self) -> None:
         """Get statistics on this plant's flow."""
-        logger.debug("Updating realtime power flow data")
         # Double check the validity of the cloud session.
         data = await self._request("GET", self._urls["flow"], body={})
         if data is None:
@@ -425,6 +434,13 @@ class InverterAPI:
         self.batt_wh_usable = int(
             self.batt_wh_per_percent * (self.realtime_battery_soc - self.batt_shutdown)
         )
+        if self.batt_wh_usable < 0:
+            logger.debug(
+                "ODD BATTERY SOC: %.2f. wh/%% = %.2f, shutdown %% = %s ",
+                self.realtime_battery_soc,
+                self.batt_wh_per_percent,
+                self.batt_shutdown,
+            )
 
         self.data_updated = datetime.now(ZoneInfo(self.timezone)).strftime(
             "%a %I:%M %p"
@@ -485,7 +501,6 @@ class InverterAPI:
 
     async def _read_settings(self) -> dict[str, Any]:
         """Read the inverter settings and set self values."""
-        logger.debug("Reading inverter settings")
 
         # Create a settings dict to return (whether we get the settings or not)
         settings: dict[str, Any] = {}

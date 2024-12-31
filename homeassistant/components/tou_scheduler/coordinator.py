@@ -38,7 +38,6 @@ class TOUUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self):
         """Fetch all data for your sensors here."""
-        _LOGGER.debug("Fetching sensor data")
         try:
             return await self.tou_scheduler.update_sensors()
         except Exception as e:

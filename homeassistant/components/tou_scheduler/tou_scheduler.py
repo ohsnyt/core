@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 import json
 import logging
+import os
 from pathlib import Path
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
@@ -70,10 +71,7 @@ class TOUScheduler:
         self.daily_shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
         self._shading_startup: bool = True
         self._current_hour: int = 0  # This is the current hour of the day, used to update shading once per hour
-        self._current_hour_pv: list[
-            float
-        ] = []  # This is the current hour's PV power, used to calculate average pv generation this hour
-        self._shading_file: str = "shading_data.json"
+        self._shading_file: str = "shading.data"
 
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
@@ -228,12 +226,16 @@ class TOUScheduler:
 
         # We can't do this without SolCast data
         if self.solcast_api is None:
-            return
+            logger.critical("Solcast API is not set. Cannot calculate shading.")
+            raise ValueError("Solcast API is not set. Cannot calculate shading.")
 
         # At startup, shading_update will be None. Go try to read the shading file.
+        source_dir: str = os.path.dirname(__file__)
+        shading_file_path = Path(source_dir) / self._shading_file
+
         if self._shading_startup:
             try:
-                async with aiofiles.open(self._shading_file, encoding="utf-8") as file:
+                async with aiofiles.open(shading_file_path, encoding="utf-8") as file:
                     file_content = await file.read()
                     shading = json.loads(file_content)
                     if not shading:
@@ -247,45 +249,36 @@ class TOUScheduler:
                 logger.warning("Shading file not found at startup.")
             except json.JSONDecodeError:
                 logger.error("Error decoding shading file at startup.")
-
-            # Set the current hour to the current hour of the day and show we have done the startup
-            self._current_hour = datetime.now(ZoneInfo(self.timezone)).hour
+            # Set the startup to false to show we have done the startup
             self._shading_startup = False
-        # If we are not at the start of a new hour, just record the current PV power generation
+        # If we our self._current_hour value is already set to this hour hour, we have done this so just return
         if self._current_hour == datetime.now(ZoneInfo(self.timezone)).hour:
-            self._current_hour_pv.append(self.inverter_api.realtime_pv_power)
             return
 
-        # We are at the start of a new hour. If we have data in the list, calculate the average PV power for the past hour, updating as needed
-        if self._current_hour_pv:
-            pv_average = sum(self._current_hour_pv) / len(self._current_hour_pv)
-            # Reset the current hour PV power list
-            self._current_hour_pv = [self.inverter_api.realtime_pv_power]
-            # Update shading if we had a positive average PV power, battery soc is low enough to allow charging, and the sun was full
-            if (
-                pv_average > 0
-                and self.solcast_api.get_current_hour_pv_estimate() > 0
-                and self.inverter_api.realtime_battery_soc < 96
-                and self.solcast_api.get_current_hour_sun_estimate() > 0.95
-            ):
-                shading = 1 - min(
-                    pv_average / self.solcast_api.get_current_hour_pv_estimate(), 1
-                )
-                self.daily_shading[int(datetime.now(ZoneInfo(self.timezone)).hour)] = (
-                    shading
-                )
-                logger.info(
-                    "Shading for %s changed to %s",
-                    datetime.now(ZoneInfo(self.timezone)).hour,
-                    shading,
-                )
-                # Write the shading to a file
-                shading_file_path = Path(self._shading_file)
-                shading_file_path.parent.mkdir(parents=True, exist_ok=True)
-                async with aiofiles.open(
-                    shading_file_path, "w", encoding="utf-8"
-                ) as file:
-                    await file.write(json.dumps(self.daily_shading))
+        # Get the pv data for the current hour, calculate the average PV power for the past hour, updating as needed
+        pv_average = await self._get_pv_statistic_for_last_hour()
+        # Update shading if we had a positive average PV power, battery soc is low enough to allow charging, and the sun was full
+        if (
+            pv_average > 0
+            and self.solcast_api.get_current_hour_pv_estimate() > 0
+            and self.inverter_api.realtime_battery_soc < 96
+            and self.solcast_api.get_current_hour_sun_estimate() > 0.95
+        ):
+            shading = 1 - min(
+                pv_average / self.solcast_api.get_current_hour_pv_estimate(), 1
+            )
+            self.daily_shading[int(datetime.now(ZoneInfo(self.timezone)).hour)] = (
+                shading
+            )
+            logger.info(
+                "Shading for %s changed to %s",
+                datetime.now(ZoneInfo(self.timezone)).hour,
+                shading,
+            )
+            # Write the shading to a file
+            shading_file_path.parent.mkdir(parents=True, exist_ok=True)
+            async with aiofiles.open(shading_file_path, "w", encoding="utf-8") as file:
+                await file.write(json.dumps(self.daily_shading))
         self._current_hour = datetime.now(ZoneInfo(self.timezone)).hour
 
     async def _calculate_load_estimates(self) -> None:
@@ -455,23 +448,18 @@ class TOUScheduler:
         required_soc = min(100, soc)
         # Save the new off-peak grid boost level
         self.grid_boost_starting_soc = int(round(required_soc, 0))
-        # Log the grid boost SOC
-        logger.info(
-            "Grid boost SoC required to have %s%% at midnight is %d%%.",
-            self.min_battery_soc,
-            self.grid_boost_starting_soc,
-        )
 
         # Test this new grid boost SoC to make sure we end up with the minimum SoC at midnight
         # Prepare the final results nicely for the user logs
         logger.info(
-            "--------- Calculating grid boost SoC for %s ---------",
+            "------ Calculating grid boost SoC for %s starting at %d%% ------",
             tomorrow.strftime("%A"),
+            self.grid_boost_starting_soc,
         )
 
         # Calculate additional SOC needed to reach midnight
         logger.info("Starting base SoC is %s%%", required_soc)
-        logger.info("Hour:    PV - Shade -   Load =  Net Power |  ± SoC =   SoC")
+        logger.info("Hour:    PV - Shade -   Load =  Net Power  |  ± SoC = SoC")
 
         for hour in range(6, 24):
             # Calculate the load for the hour (multiplied by the efficiency factor)
@@ -490,8 +478,9 @@ class TOUScheduler:
             net_power = hour_net_pv - hour_load
             hour_soc = net_power / (self.inverter_api.batt_wh_per_percent or 1)
             required_soc += hour_soc
+            shade = int(round(hour_shading * 100, 2))
             logger.info(
-                f"{printable_hour(hour)}: {hour_pv:5,.0f} - {hour_shading:5,.0f} - {hour_load:6,.0f} = {net_power:7,.0f} wH  | {hour_soc:4,.1f}% = {required_soc:4,.0f}%"  # noqa: G004
+                f"{printable_hour(hour)}: {hour_pv:5,.0f} - {shade:4d}% - {hour_load:6,.0f} = {net_power:7,.0f} wH  | {hour_soc:4,.1f}% = {required_soc:4,.0f}%"  # noqa: G004
             )
         logger.info("-------------Done calculating grid boost SoC-------------")
 
@@ -536,6 +525,35 @@ class TOUScheduler:
             end_time_utc,
             entity_ids,
         )
+
+    async def _get_pv_statistic_for_last_hour(self) -> float:
+        """Get the mean PV power for the last hour."""
+        # Set the sensor entity_id and the start and end time to get the last hour's statistics
+        entity_id = f"sensor.{self.inverter_api.plant_id}_tou_power_pv"
+        now = datetime.now(ZoneInfo(self.inverter_api.timezone))
+        start_of_last_hour = now.replace(minute=0, second=0, microsecond=0) - timedelta(
+            hours=1
+        )
+        end_of_last_hour = (
+            start_of_last_hour + timedelta(hours=1) - timedelta(microseconds=1)
+        )
+
+        # Get the statistics for the last hour
+        stats = await get_instance(self.hass).async_add_executor_job(
+            self._get_statistics_during_period,
+            start_of_last_hour,
+            end_of_last_hour,
+            {entity_id},
+        )
+
+        # Extract the mean value for the entity_id
+        mean_value = stats.get(entity_id, [{}])[0].get("mean", 0.0)
+        logger.debug(
+            ">>>>PV power generation at %s was %s wH<<<<",
+            printable_hour(start_of_last_hour.hour),
+            mean_value,
+        )
+        return mean_value
 
     def _get_statistics_during_period(
         self,
