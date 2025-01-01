@@ -71,7 +71,7 @@ class TOUScheduler:
         self.daily_shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
         self._shading_startup: bool = True
         self._current_hour: int = 0  # This is the current hour of the day, used to update shading once per hour
-        self._shading_file: str = "shading.data"
+        self._shading_file_path = Path(os.path.dirname(__file__)) / "shading.data"
 
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
@@ -173,6 +173,24 @@ class TOUScheduler:
         # Listen for changes to the options and update the cloud object
         self.config_entry.add_update_listener(self._options_callback)
 
+        # At startup, try to read the shading file.
+        try:
+            async with aiofiles.open(self._shading_file_path, encoding="utf-8") as file:
+                file_content = await file.read()
+                shading = json.loads(file_content)
+                if not shading:
+                    logger.info("No shading data available in the file at startup.")
+                else:
+                    self.daily_shading = {
+                        int(hour): value for hour, value in shading.items()
+                    }
+                    logger.info("Shading file read at startup.")
+        except FileNotFoundError:
+            logger.warning("Shading file not found at startup.")
+        except json.JSONDecodeError:
+            logger.error("Error decoding shading file at startup.")
+        # Set the startup to false to show we have done the startup
+
     async def _handle_options_dialog(
         self, hass: HomeAssistant, config_entry: ConfigEntry
     ) -> None:
@@ -224,39 +242,18 @@ class TOUScheduler:
         We then reset the average PV power to the first value for this hour. and repeat the process for the next hour.
         """
 
-        # We can't do this without SolCast data
-        if self.solcast_api is None:
-            logger.critical("Solcast API is not set. Cannot calculate shading.")
-            raise ValueError("Solcast API is not set. Cannot calculate shading.")
-
-        # At startup, shading_update will be None. Go try to read the shading file.
-        source_dir: str = os.path.dirname(__file__)
-        shading_file_path = Path(source_dir) / self._shading_file
-
-        if self._shading_startup:
-            try:
-                async with aiofiles.open(shading_file_path, encoding="utf-8") as file:
-                    file_content = await file.read()
-                    shading = json.loads(file_content)
-                    if not shading:
-                        logger.info("No shading data available in the file at startup.")
-                    else:
-                        self.daily_shading = {
-                            int(hour): value for hour, value in shading.items()
-                        }
-                        logger.info("Shading file read at startup.")
-            except FileNotFoundError:
-                logger.warning("Shading file not found at startup.")
-            except json.JSONDecodeError:
-                logger.error("Error decoding shading file at startup.")
-            # Set the startup to false to show we have done the startup
-            self._shading_startup = False
         # If we our self._current_hour value is already set to this hour hour, we have done this so just return
         if self._current_hour == datetime.now(ZoneInfo(self.timezone)).hour:
             return
 
         # Get the pv data for the current hour, calculate the average PV power for the past hour, updating as needed
         pv_average = await self._get_pv_statistic_for_last_hour()
+
+        logger.debug(
+            "Average PV power for the past hour: %s, current sun estimate is: %.2f",
+            pv_average,
+            self.solcast_api.get_current_hour_sun_estimate(),
+        )
         # Update shading if we had a positive average PV power, battery soc is low enough to allow charging, and the sun was full
         if (
             pv_average > 0
@@ -276,9 +273,11 @@ class TOUScheduler:
                 shading,
             )
             # Write the shading to a file
-            shading_file_path.parent.mkdir(parents=True, exist_ok=True)
-            async with aiofiles.open(shading_file_path, "w", encoding="utf-8") as file:
+            async with aiofiles.open(
+                self._shading_file_path, "w", encoding="utf-8"
+            ) as file:
                 await file.write(json.dumps(self.daily_shading))
+                logger.info("Shading file updated.")
         self._current_hour = datetime.now(ZoneInfo(self.timezone)).hour
 
     async def _calculate_load_estimates(self) -> None:

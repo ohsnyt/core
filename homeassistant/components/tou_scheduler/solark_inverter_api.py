@@ -425,7 +425,7 @@ class InverterAPI:
             return
 
         if self._safe_get(data, "soc") <= 0:
-            logger.debug("ODD BATTERY SOC: %s ", data)
+            logger.critical("ODD BATTERY SOC: %s ", data)
             return
         self.realtime_battery_soc = self._safe_get(data, "soc")
         self.realtime_battery_power = self._safe_get(data, "battPower")
