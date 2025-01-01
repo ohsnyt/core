@@ -97,6 +97,7 @@ class InverterAPI:
         )
         self.batt_wh_per_percent: float = 0.0  # Battery capacity in Wh per percent
         self.batt_shutdown: int = DEFAULT_BATTERY_SHUTDOWN  # Battery shutdown SoC
+        self.batt_low_warning: int = DEFAULT_BATTERY_SHUTDOWN + 5
 
         # Realtime power in and out. Shown in kW
         self.realtime_battery_soc = 0.0
@@ -512,6 +513,7 @@ class InverterAPI:
             self.grid_boost_end = data.get("sellTime2", DEFAULT_GRID_BOOST_END)
             batt_capacity_ah = self._safe_get(data, "batteryCap")
             self.batt_shutdown = int(self._safe_get(data, "batteryShutdownCap"))
+            self.batt_low_warning = int(self._safe_get(data, "batteryLowCap"))
             batt_float_voltage = self._safe_get(data, "floatVolt")
             self.batt_wh_per_percent = batt_capacity_ah * batt_float_voltage / 100
 

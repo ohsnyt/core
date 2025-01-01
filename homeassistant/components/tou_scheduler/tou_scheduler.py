@@ -56,7 +56,6 @@ class TOUScheduler:
         self.config_entry = config_entry
         self.timezone = timezone
         self.status = "Starting"
-        self._tou_update_hour = datetime.now(ZoneInfo(self.timezone)).hour
 
         # Here is the inverter info
         self.inverter_api: InverterAPI = inverter_api
@@ -69,8 +68,9 @@ class TOUScheduler:
 
         # Here is the shading info: default to 0.0 for each hour of the day and no last update date
         self.daily_shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
-        self._shading_startup: bool = True
-        self._current_hour: int = 0  # This is the current hour of the day, used to update shading once per hour
+        self._current_hour: int = (
+            datetime.now(ZoneInfo(self.timezone)).hour - 1
+        )  # This is used to update some data once per hour
         self._shading_file_path = Path(os.path.dirname(__file__)) / "shading.data"
 
         # Here is the TOU boost info we will monitor and update
@@ -80,6 +80,7 @@ class TOUScheduler:
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
         self._boost: str = "testing"
         self.days_of_load_history: int = DEFAULT_GRID_BOOST_HISTORY
+        self._update_tou_boost: bool = False
 
     def to_dict(self) -> dict[str, float | str]:
         """Return this sensor data as a dictionary.
@@ -133,10 +134,37 @@ class TOUScheduler:
             "load": str(self.daily_load_averages),
         }
 
+    async def _hourly_updates(self) -> None:
+        """Update the hourly data for the sensors after 10 past the hour."""
+        # Check if we are at least 10 minutes past the hour
+        current_time = datetime.now(ZoneInfo(self.timezone))
+        if current_time.minute < 10:
+            return
+
+        # If we have already calculated shading for this hour, return
+        if self._current_hour == current_time.hour:
+            return
+
+        # Update our daily shading values (various parts done at different schedules)
+        await self._calculate_shading()
+
+        #  Compute remaining battery life...
+        await self._calculate_tou_battery_remaining_time()
+
+        #  Compute off-peak grid boost if the grid boost SoC changed
+        if self._update_tou_boost:
+            await self._calculate_tou_boost_soc()
+            self._update_tou_boost = False
+
+        self._current_hour = current_time.hour
+
     async def update_sensors(self) -> dict[str, int | float | str]:
         """Update the sensors with the latest data and return the updated sensor data as a dictionary."""
         # Set status to indicate we are working - May not be needed
         self.status = "Working"
+
+        # Update the hourly load estimates (once a day)
+        await self._calculate_load_estimates()
 
         # Update the inverter data for the sensors (done every 5 minutes)
         #   (This must be done first because the other updates depend on current inverter data, especially at startup)
@@ -144,18 +172,10 @@ class TOUScheduler:
         await self.inverter_api.refresh_data()
 
         # Try to update the Solcast data (true if successful at startup and as per user schedule)
-        update_tou_boost = await self.solcast_api.refresh_data()
-        # Update our daily shading values (various parts done at different schedules)
-        await self._calculate_shading()
-        # Update the hourly load estimates (once a day)
-        await self._calculate_load_estimates()
+        self._update_tou_boost = await self.solcast_api.refresh_data()
 
-        # Hourly based on the above daily information...
-        #  ...compute remaining battery life...
-        await self._calculate_tou_battery_remaining_time()
-        #  ...and compute off-peak grid boost if the grid boost SoC changes
-        if update_tou_boost:
-            await self._calculate_tou_boost_soc()
+        # Do hourly updates
+        await self._hourly_updates()
 
         # Return the updated sensor data
         return self.to_dict()
@@ -167,13 +187,7 @@ class TOUScheduler:
             logger.error("Config entry is not set.")
             return
 
-        # Load the options from the config entry
-        if self.config_entry.options:
-            await self._handle_options_dialog(self.hass, self.config_entry)
-        # Listen for changes to the options and update the cloud object
-        self.config_entry.add_update_listener(self._options_callback)
-
-        # At startup, try to read the shading file.
+        # Try to read the shading file.
         try:
             async with aiofiles.open(self._shading_file_path, encoding="utf-8") as file:
                 file_content = await file.read()
@@ -189,7 +203,12 @@ class TOUScheduler:
             logger.warning("Shading file not found at startup.")
         except json.JSONDecodeError:
             logger.error("Error decoding shading file at startup.")
-        # Set the startup to false to show we have done the startup
+
+        # Load the options from the config entry
+        if self.config_entry.options:
+            await self._handle_options_dialog(self.hass, self.config_entry)
+        # Listen for changes to the options and update the cloud object
+        self.config_entry.add_update_listener(self._options_callback)
 
     async def _handle_options_dialog(
         self, hass: HomeAssistant, config_entry: ConfigEntry
@@ -218,7 +237,6 @@ class TOUScheduler:
         self.inverter_api.manual_boost_soc = int(user_input.get("manual_boost_soc", 0))
 
         # Force an update of the sensors
-        self._tou_update_hour = datetime.now(ZoneInfo(self.timezone)).hour
         await self.update_sensors()
 
     async def _options_callback(
@@ -242,10 +260,6 @@ class TOUScheduler:
         We then reset the average PV power to the first value for this hour. and repeat the process for the next hour.
         """
 
-        # If we our self._current_hour value is already set to this hour hour, we have done this so just return
-        if self._current_hour == datetime.now(ZoneInfo(self.timezone)).hour:
-            return
-
         # Get the pv data for the current hour, calculate the average PV power for the past hour, updating as needed
         pv_average = await self._get_pv_statistic_for_last_hour()
 
@@ -255,6 +269,7 @@ class TOUScheduler:
             self.solcast_api.get_current_hour_sun_estimate(),
         )
         # Update shading if we had a positive average PV power, battery soc is low enough to allow charging, and the sun was full
+        last_hour = (datetime.now(ZoneInfo(self.timezone)).hour - 1) % 24
         if (
             pv_average > 0
             and self.solcast_api.get_current_hour_pv_estimate() > 0
@@ -264,12 +279,10 @@ class TOUScheduler:
             shading = 1 - min(
                 pv_average / self.solcast_api.get_current_hour_pv_estimate(), 1
             )
-            self.daily_shading[int(datetime.now(ZoneInfo(self.timezone)).hour)] = (
-                shading
-            )
+            self.daily_shading[last_hour] = shading
             logger.info(
                 "Shading for %s changed to %s",
-                datetime.now(ZoneInfo(self.timezone)).hour,
+                last_hour,
                 shading,
             )
             # Write the shading to a file
@@ -283,11 +296,7 @@ class TOUScheduler:
     async def _calculate_load_estimates(self) -> None:
         """Calculate the daily load averages once a day."""
 
-        if self.inverter_api is None:
-            logger.error("Cannot calculate load estimates. Inverter API is not set")
-            return
-
-        # Skip if not at startup or already done today
+        # Skip already done today
         if (
             self.load_estimates_updated is not None
             and self.load_estimates_updated
@@ -345,10 +354,6 @@ class TOUScheduler:
 
         Update the inverter if the SoC changes.
         """
-
-        # Don't repeat if we already did it this hour
-        if self._tou_update_hour != datetime.now(ZoneInfo(self.timezone)).hour:
-            return
 
         # For each hour going forward, we need to calculate how long the battery will last until completely exhausted.
         # Set initial variables
@@ -410,8 +415,6 @@ class TOUScheduler:
             starting_time,
             round(minutes / 60, 1),
         )
-        # Reset the recalc hour variable
-        self._tou_update_hour = (datetime.now(ZoneInfo(self.timezone)).hour + 1) % 24
 
     async def _calculate_tou_boost_soc(self) -> None:
         """Calculate tomorrow off-peak grid boost required SoC.
@@ -424,6 +427,9 @@ class TOUScheduler:
         # Initialize variables
         required_soc = float(DEFAULT_GRID_BOOST_STARTING_SOC)
         tomorrow = datetime.now(ZoneInfo(self.timezone)).date() + timedelta(days=1)
+        # First we assume the lowest point of the battery will be the warning level, but at the end we will also compare to the desired midnight SoC
+        lowest_point = float(-self.inverter_api.batt_low_warning)
+        running_soc = 0.0
 
         # Do the initial calculation for the grid boost SoC
         for hour in range(6, 24):
@@ -439,10 +445,11 @@ class TOUScheduler:
             )
             net_power = pv - load
             net_soc = net_power / (self.inverter_api.batt_wh_per_percent or 1)
-            required_soc += net_soc
-        # Add SOC reserved desired at midnight
-        required_soc -= self.min_battery_soc * 2
-        soc = round(-required_soc, 0)
+            running_soc += net_soc
+            lowest_point = min(lowest_point, running_soc)
+        # Compare the lowest point to the final SoC less desired midnight SoC
+        lowest_point = min(lowest_point, running_soc - self.min_battery_soc)
+        soc = round(-lowest_point, 0)
         # Prevent required SoC from going above 100%
         required_soc = min(100, soc)
         # Save the new off-peak grid boost level
