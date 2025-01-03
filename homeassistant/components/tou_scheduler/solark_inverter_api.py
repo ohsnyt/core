@@ -33,14 +33,25 @@ else:
 
 
 class InverterAPI:
-    """Sol-Ark API to interact with the Sol-Ark Data Cloud.
+    """Sol-Ark API to interact with the inverter via the Sol-Ark Data Cloud.
 
     This will allow us to get pv, load, grid, and battery data from the cloud.
-    It will allow us to set the grid boost SOC and time of use settings in the inverter.
+    It will allow us to read and set the grid boost SOC and time of use settings in the inverter.
 
-    It requires a username and password to authenticate to the cloud. This will return false if the authentication fails.
+    It requires a username and password to authenticate to the cloud. Authentication will return false if the authentication fails.
+
+    The class contains:
+        - 6 methods to provide constructor, getters and setters, and string representation.
+        - 11 private helper methods.
+        - 5 public methods to
+            a) test authentication credentials
+            b) authenticate,
+            c) reauthenticate,
+            d) get data from the inverter
+            e) write grid boost state of charge settings to the inverter.
     """
 
+    # Class initialization, getters and setters, and string representation
     def __init__(self, username: str, password: str, timezone: str) -> None:
         """Sol-Ark data cloud object."""
 
@@ -136,6 +147,7 @@ class InverterAPI:
         """Return a string representation of the cloud."""
         return f"Cloud(url={CLOUD_URL}, selected plant={self.plant_id}, updated={self.data_updated})"
 
+    # Private helper methods
     def _build_api_endpoints(self) -> None:
         """Build endpoints needed to get sensor and settings data from the cloud.
 
@@ -172,6 +184,247 @@ class InverterAPI:
         )
         self._urls["load"] = prefix + f"load/{self.inverter_serial_number}/realtime"
 
+    def _prepare_authorization_payload(self) -> dict[str, str]:
+        """Prepare the payload for authentication or token renewal."""
+        if self.username and self.password:
+            if self._refresh_token:
+                return {
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._refresh_token,
+                }
+            return {
+                "username": self.username,
+                "password": self.password,
+                "grant_type": "password",
+                "client_id": "csp-web",
+            }
+        logger.error("Cannot authenticate: No username or password")
+        return {}
+
+    def _process_response_data(self, response_data: dict[str, Any]) -> bool:
+        """Process the response data from the authentication request."""
+        data = response_data.get("data", {})
+        if not data:
+            return False
+
+        token = data.get("access_token", "")
+        self._refresh_token = data.get("refresh_token", None)
+        expires = data.get("expires_in", None)
+
+        if not (token and expires and self._refresh_token):
+            return False
+
+        self.bearer_token_expires_on = datetime.now(
+            ZoneInfo(self.timezone)
+        ) + timedelta(seconds=expires)
+        return True
+
+    def _convert_inverter_model(self, value: str) -> str:
+        """Convert the inverter model to a more recognizable string."""
+        return "Sol-Ark 12K-2P-N" if value == "STROG INV" else value
+
+    async def _update_flow(self) -> None:
+        """Get statistics on this plant's flow."""
+        # Double check the validity of the cloud session.
+        data = await self._request("GET", self._urls["flow"], body={})
+        if data is None:
+            logger.error("Unable to update realtime power flow information")
+            return
+
+        if self._safe_get(data, "soc") <= 0:
+            logger.critical("ODD BATTERY SOC: %s ", data)
+            return
+        self.realtime_battery_soc = self._safe_get(data, "soc")
+        self.realtime_battery_power = self._safe_get(data, "battPower")
+        self.realtime_load_power = self._safe_get(data, "loadOrEpsPower")
+        self.realtime_grid_power = self._safe_get(data, "gridOrMeterPower")
+        self.realtime_pv_power = self._safe_get(data, "pvPower")
+
+        # Calculate the current usable battery charge in Wh
+        self.batt_wh_usable = int(
+            self.batt_wh_per_percent * (self.realtime_battery_soc - self.batt_shutdown)
+        )
+
+        self.data_updated = datetime.now(ZoneInfo(self.timezone)).strftime(
+            "%a %I:%M %p"
+        )
+
+    async def _calculate_total_efficiency(self) -> None:
+        """Calculate the long term (total) power efficiency."""
+
+        # Only calculate the total efficiency once a month
+        if datetime.now(ZoneInfo(self.timezone)).month == self._efficiency_update_month:
+            return
+
+        # Get totals for battery, PV, Grid, and Load from MySolark data cloud
+        logger.debug("Getting battery totals")
+        data = await self._request("GET", self._urls["battery"], body={})
+        if data is None:
+            logger.error("Unable to update battery information")
+            return
+        total_batt_charge = float(data.get("etotalChg", 0))
+        total_batt_discharge = float(data.get("etotalDischg", 0))
+        self._batt_wh_max_est = int(float(data.get("capacity", 0)) * 48)
+
+        logger.debug("Getting PV totals")
+        data = await self._request("GET", self._urls["pv"], body={})
+        if data is None:
+            logger.error("Unable to update PV information")
+            return
+        total_pv = float(data.get("etotal", 0.0))
+
+        logger.debug("Getting grid totals")
+        data = await self._request("GET", self._urls["grid"], body={})
+        if data is None:
+            logger.error("Unable to update grid information")
+            return
+        total_grid_import_buy = float(data.get("etotalFrom", 0))
+
+        logger.debug("Getting load totals")
+        data = await self._request("GET", self._urls["load"], body={})
+        if data is None:
+            logger.error("Unable to update load information")
+            return
+        total_load = float(data.get("totalUsed", 0.0))
+
+        # Calculate the total power source and the total power efficiency
+        total_source = (
+            total_pv + total_grid_import_buy + total_batt_discharge - total_batt_charge
+        )
+        # Prevent divide by zero. Only set the total efficiency if we had any power from the sources
+        if (total_source) > 0:
+            efficiency = round((total_load / total_source), 2)
+        else:
+            efficiency = DEFAULT_INVERTER_EFFICIENCY
+        logger.info("Total power efficiency is %.0f", efficiency * 100)
+        self.efficiency = efficiency
+
+        # Update the month we last calculated the total efficiency
+        self._efficiency_update_month = datetime.now(ZoneInfo(self.timezone)).month
+
+    async def _read_settings(self) -> dict[str, Any]:
+        """Read the inverter settings and set self values."""
+
+        # Create a settings dict to return (whether we get the settings or not)
+        settings: dict[str, Any] = {}
+        data = await self._request("GET", self._urls["read_settings"], body={})
+
+        if data is None:
+            logger.error("Unable to update load information")
+            return settings
+
+        if data is not None:
+            self._grid_boost_starting_soc = int(self._safe_get(data, "cap1"))
+            self.grid_boost_start = data.get("sellTime1", DEFAULT_GRID_BOOST_START)
+            self.grid_boost_end = data.get("sellTime2", DEFAULT_GRID_BOOST_END)
+            batt_capacity_ah = self._safe_get(data, "batteryCap")
+            self.batt_shutdown = int(self._safe_get(data, "batteryShutdownCap"))
+            self.batt_low_warning = int(self._safe_get(data, "batteryLowCap"))
+            batt_float_voltage = self._safe_get(data, "floatVolt")
+            self.batt_wh_per_percent = batt_capacity_ah * batt_float_voltage / 100
+
+            self.grid_boost_wh_min = int(
+                self.batt_wh_per_percent * self._grid_boost_starting_soc
+            )
+
+        return settings
+
+    def _safe_get(self, data: dict[str, Any], key: str, default: float = 0.0) -> float:
+        """Convert a value to float safely, returning the default value if the value is None or cannot be converted."""
+        try:
+            value = data.get(key, default)
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    async def _request(
+        self, method: str, endpoint: str, body: Any | None = None
+    ) -> dict[str, Any] | None:
+        """Send a request to the Sol-Ark cloud and return the data portion of the response."""
+
+        # Log the time until we need to reauthenticate if we are between the top of the hour and five minutes before the hour
+        time_remaining = self.bearer_token_expires_on - datetime.now(
+            ZoneInfo(self.timezone)
+        )
+        if self._reauth_counter % 100 == 0 or time_remaining.total_seconds() < 300:
+            logger.debug(
+                "We need to reauthenticate in %s hours %s minutes",
+                time_remaining.total_seconds() // 3600 % 24,
+                time_remaining.total_seconds() // 60 % 60,
+            )
+        self._reauth_counter += 1
+
+        # Check if we need to reauthenticate
+        if self.bearer_token_expires_on and datetime.now(
+            ZoneInfo(self.timezone)
+        ) >= self.bearer_token_expires_on - timedelta(hours=1):
+            logger.debug("Reauthenticating to the Sol-Ark cloud")
+            if not await self.reauthenticate():
+                logger.error(
+                    "Failed to reauthenticate to the Sol-Ark cloud. Doing backup authentication."
+                )
+                # Fallback if reauthentication fails.
+                payload = self._prepare_authorization_payload()
+                async with aiohttp.ClientSession() as session:
+                    try:
+                        async with session.post(
+                            self._urls["auth"], json=payload, timeout=TIMEOUT
+                        ) as response:
+                            if response.status == 200:
+                                outer = await response.json()
+                                if outer is None:
+                                    logger.error(
+                                        "Failed to get a valid response from the authentication request"
+                                    )
+                                    return None
+                                data = outer.get("data", {})
+                                logger.info("Authenticated with Solark Inverter API")
+                                token = data.get("access_token", "")
+                                session.headers["Authorization"] = f"Bearer {token}"
+                                self._headers["Authorization"] = f"Bearer {token}"
+                                self._refresh_token = data.get("refresh_token", None)
+                                expires = data.get("expires_in", None)
+                                self.bearer_token_expires_on = (
+                                    datetime.now(ZoneInfo(self.timezone))
+                                    + timedelta(seconds=expires)
+                                    if expires
+                                    else datetime.now(ZoneInfo(self.timezone))
+                                )
+                    except aiohttp.ClientError as err:
+                        logger.error("Request error: %s", err)
+                        return None
+
+        if method == "GET":
+            return await self._get_request(endpoint)
+        if method == "POST":
+            return await self._post_request(endpoint, body)
+        logger.error("Unsupported HTTP method: %s", method)
+        return None
+
+    async def _get_request(self, endpoint: str) -> dict[str, Any] | None:
+        """Send a GET request to the Sol-Ark cloud and return the data portion of the response."""
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            try:
+                async with session.get(endpoint, timeout=TIMEOUT) as response:
+                    response_data = await response.json() if response else None
+                    return response_data.get("data") if response_data else None
+            except aiohttp.ClientError as err:
+                logger.error("Request error: %s", err)
+                return None
+
+    async def _post_request(self, endpoint: str, body: Any) -> dict[str, Any] | None:
+        """Send a POST request to the Sol-Ark cloud and return the response."""
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            try:
+                async with session.post(
+                    endpoint, json=json.dumps(body), timeout=TIMEOUT
+                ) as response:
+                    return await response.json() if response else None
+            except aiohttp.ClientError as err:
+                logger.error("Request error: %s", err)
+                return None
+
+    # Public methods
     async def test_authenticate(self) -> bool:
         """Authenticate to the Sol-Ark cloud for config_flow. Return list of plants or None."""
         # If we don't have a username or password, we can't authenticate
@@ -316,41 +569,6 @@ class InverterAPI:
                 return False
         return True
 
-    def _prepare_authorization_payload(self) -> dict[str, str]:
-        """Prepare the payload for authentication or token renewal."""
-        if self.username and self.password:
-            if self._refresh_token:
-                return {
-                    "grant_type": "refresh_token",
-                    "refresh_token": self._refresh_token,
-                }
-            return {
-                "username": self.username,
-                "password": self.password,
-                "grant_type": "password",
-                "client_id": "csp-web",
-            }
-        logger.error("Cannot authenticate: No username or password")
-        return {}
-
-    def _process_response_data(self, response_data: dict[str, Any]) -> bool:
-        """Process the response data from the authentication request."""
-        data = response_data.get("data", {})
-        if not data:
-            return False
-
-        token = data.get("access_token", "")
-        self._refresh_token = data.get("refresh_token", None)
-        expires = data.get("expires_in", None)
-
-        if not (token and expires and self._refresh_token):
-            return False
-
-        self.bearer_token_expires_on = datetime.now(
-            ZoneInfo(self.timezone)
-        ) + timedelta(seconds=expires)
-        return True
-
     async def reauthenticate(self) -> bool:
         """Reauthenticate to the Sol-Ark cloud using the refresh token."""
         if not self._refresh_token:
@@ -417,120 +635,6 @@ class InverterAPI:
         # Report that the cloud status was good
         self.cloud_status = Cloud_Status.ONLINE
 
-    async def _update_flow(self) -> None:
-        """Get statistics on this plant's flow."""
-        # Double check the validity of the cloud session.
-        data = await self._request("GET", self._urls["flow"], body={})
-        if data is None:
-            logger.error("Unable to update realtime power flow information")
-            return
-
-        if self._safe_get(data, "soc") <= 0:
-            logger.critical("ODD BATTERY SOC: %s ", data)
-            return
-        self.realtime_battery_soc = self._safe_get(data, "soc")
-        self.realtime_battery_power = self._safe_get(data, "battPower")
-        self.realtime_load_power = self._safe_get(data, "loadOrEpsPower")
-        self.realtime_grid_power = self._safe_get(data, "gridOrMeterPower")
-        self.realtime_pv_power = self._safe_get(data, "pvPower")
-
-        # Calculate the current usable battery charge in Wh
-        self.batt_wh_usable = int(
-            self.batt_wh_per_percent * (self.realtime_battery_soc - self.batt_shutdown)
-        )
-
-        self.data_updated = datetime.now(ZoneInfo(self.timezone)).strftime(
-            "%a %I:%M %p"
-        )
-
-    async def _calculate_total_efficiency(self) -> None:
-        """Calculate the long term (total) power efficiency."""
-
-        # Only calculate the total efficiency once a month
-        if datetime.now(ZoneInfo(self.timezone)).month == self._efficiency_update_month:
-            return
-
-        # Get totals for battery, PV, Grid, and Load from MySolark data cloud
-        logger.debug("Getting battery totals")
-        data = await self._request("GET", self._urls["battery"], body={})
-        if data is None:
-            logger.error("Unable to update battery information")
-            return
-        total_batt_charge = float(data.get("etotalChg", 0))
-        total_batt_discharge = float(data.get("etotalDischg", 0))
-        self._batt_wh_max_est = int(float(data.get("capacity", 0)) * 48)
-
-        logger.debug("Getting PV totals")
-        data = await self._request("GET", self._urls["pv"], body={})
-        if data is None:
-            logger.error("Unable to update PV information")
-            return
-        total_pv = float(data.get("etotal", 0.0))
-
-        logger.debug("Getting grid totals")
-        data = await self._request("GET", self._urls["grid"], body={})
-        if data is None:
-            logger.error("Unable to update grid information")
-            return
-        total_grid_import_buy = float(data.get("etotalFrom", 0))
-
-        logger.debug("Getting load totals")
-        data = await self._request("GET", self._urls["load"], body={})
-        if data is None:
-            logger.error("Unable to update load information")
-            return
-        total_load = float(data.get("totalUsed", 0.0))
-
-        # Calculate the total power source and the total power efficiency
-        total_source = (
-            total_pv + total_grid_import_buy + total_batt_discharge - total_batt_charge
-        )
-        # Prevent divide by zero. Only set the total efficiency if we had any power from the sources
-        if (total_source) > 0:
-            efficiency = round((total_load / total_source), 2)
-        else:
-            efficiency = DEFAULT_INVERTER_EFFICIENCY
-        logger.info("Total power efficiency is %.0f", efficiency * 100)
-        self.efficiency = efficiency
-
-        # Update the month we last calculated the total efficiency
-        self._efficiency_update_month = datetime.now(ZoneInfo(self.timezone)).month
-
-    async def _read_settings(self) -> dict[str, Any]:
-        """Read the inverter settings and set self values."""
-
-        # Create a settings dict to return (whether we get the settings or not)
-        settings: dict[str, Any] = {}
-        data = await self._request("GET", self._urls["read_settings"], body={})
-
-        if data is None:
-            logger.error("Unable to update load information")
-            return settings
-
-        if data is not None:
-            self._grid_boost_starting_soc = int(self._safe_get(data, "cap1"))
-            self.grid_boost_start = data.get("sellTime1", DEFAULT_GRID_BOOST_START)
-            self.grid_boost_end = data.get("sellTime2", DEFAULT_GRID_BOOST_END)
-            batt_capacity_ah = self._safe_get(data, "batteryCap")
-            self.batt_shutdown = int(self._safe_get(data, "batteryShutdownCap"))
-            self.batt_low_warning = int(self._safe_get(data, "batteryLowCap"))
-            batt_float_voltage = self._safe_get(data, "floatVolt")
-            self.batt_wh_per_percent = batt_capacity_ah * batt_float_voltage / 100
-
-            self.grid_boost_wh_min = int(
-                self.batt_wh_per_percent * self._grid_boost_starting_soc
-            )
-
-        return settings
-
-    def _safe_get(self, data: dict[str, Any], key: str, default: float = 0.0) -> float:
-        """Convert a value to float safely, returning the default value if the value is None or cannot be converted."""
-        try:
-            value = data.get(key, default)
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
     async def write_grid_boost_soc(self, boost: str, value: int) -> None:
         """Set the inverter setting for Time of Use block 1, State of Charge as per the supplied directive."""
 
@@ -580,98 +684,8 @@ class InverterAPI:
         # response,
         # )
 
-    async def _request(
-        self, method: str, endpoint: str, body: Any | None = None
-    ) -> dict[str, Any] | None:
-        """Send a request to the Sol-Ark cloud and return the data portion of the response."""
 
-        # Log the time until we need to reauthenticate if we are between the top of the hour and five minutes before the hour
-        time_remaining = self.bearer_token_expires_on - datetime.now(
-            ZoneInfo(self.timezone)
-        )
-        if self._reauth_counter % 100 == 0 or time_remaining.total_seconds() < 300:
-            logger.debug(
-                "We need to reauthenticate in %s hours %s minutes",
-                time_remaining.total_seconds() // 3600 % 24,
-                time_remaining.total_seconds() // 60 % 60,
-            )
-        self._reauth_counter += 1
-
-        # Check if we need to reauthenticate
-        if self.bearer_token_expires_on and datetime.now(
-            ZoneInfo(self.timezone)
-        ) >= self.bearer_token_expires_on - timedelta(hours=1):
-            logger.debug("Reauthenticating to the Sol-Ark cloud")
-            if not await self.reauthenticate():
-                logger.error(
-                    "Failed to reauthenticate to the Sol-Ark cloud. Doing backup authentication."
-                )
-                # Fallback if reauthentication fails.
-                payload = self._prepare_authorization_payload()
-                async with aiohttp.ClientSession() as session:
-                    try:
-                        async with session.post(
-                            self._urls["auth"], json=payload, timeout=TIMEOUT
-                        ) as response:
-                            if response.status == 200:
-                                outer = await response.json()
-                                if outer is None:
-                                    logger.error(
-                                        "Failed to get a valid response from the authentication request"
-                                    )
-                                    return None
-                                data = outer.get("data", {})
-                                logger.info("Authenticated with Solark Inverter API")
-                                token = data.get("access_token", "")
-                                session.headers["Authorization"] = f"Bearer {token}"
-                                self._headers["Authorization"] = f"Bearer {token}"
-                                self._refresh_token = data.get("refresh_token", None)
-                                expires = data.get("expires_in", None)
-                                self.bearer_token_expires_on = (
-                                    datetime.now(ZoneInfo(self.timezone))
-                                    + timedelta(seconds=expires)
-                                    if expires
-                                    else datetime.now(ZoneInfo(self.timezone))
-                                )
-                    except aiohttp.ClientError as err:
-                        logger.error("Request error: %s", err)
-                        return None
-
-        if method == "GET":
-            return await self._get_request(endpoint)
-        if method == "POST":
-            return await self._post_request(endpoint, body)
-        logger.error("Unsupported HTTP method: %s", method)
-        return None
-
-    async def _get_request(self, endpoint: str) -> dict[str, Any] | None:
-        """Send a GET request to the Sol-Ark cloud and return the data portion of the response."""
-        async with aiohttp.ClientSession(headers=self._headers) as session:
-            try:
-                async with session.get(endpoint, timeout=TIMEOUT) as response:
-                    response_data = await response.json() if response else None
-                    return response_data.get("data") if response_data else None
-            except aiohttp.ClientError as err:
-                logger.error("Request error: %s", err)
-                return None
-
-    async def _post_request(self, endpoint: str, body: Any) -> dict[str, Any] | None:
-        """Send a POST request to the Sol-Ark cloud and return the response."""
-        async with aiohttp.ClientSession(headers=self._headers) as session:
-            try:
-                async with session.post(
-                    endpoint, json=json.dumps(body), timeout=TIMEOUT
-                ) as response:
-                    return await response.json() if response else None
-            except aiohttp.ClientError as err:
-                logger.error("Request error: %s", err)
-                return None
-
-    def _convert_inverter_model(self, value: str) -> str:
-        """Convert the inverter model to a more recognizable string."""
-        return "Sol-Ark 12K-2P-N" if value == "STROG INV" else value
-
-
+# Enum classes
 class Inverter(Enum):
     """Sol-Ark Inverter Status."""
 
@@ -680,15 +694,6 @@ class Inverter(Enum):
     WARNING = 2
     FAULT = 3
     UPGRADING = 4
-    UNKNOWN = 9
-
-
-class Grid_Status(Enum):
-    """Sol-Ark Grid Status."""
-
-    GRID_SELL = -1
-    GRID_SOMETHING = 0
-    GRID_BUY = 1
     UNKNOWN = 9
 
 
@@ -708,44 +713,6 @@ class Batt_Status(Enum):
     DISCHARGING = 0
     CHARGING = 1
     IDLE = 2
-    UNKNOWN = 9
-
-
-class Fault(Enum):
-    """Sol-Ark Fault Codes."""
-
-    INFO = 1
-    WARNING = 2
-    FAULT = 3
-    UNKNOWN = 9
-
-
-class Inverter_Type(Enum):
-    """Sol-Ark Inverter Type."""
-
-    INVERTER = 1
-    ESS_MODULE = 2
-    MICRO_INVERTER = 3
-    CONVERT = 4
-    METER = 5
-    BATTERY = 6
-    UNKNOWN = 9
-
-
-class batt_Type(Enum):
-    """Sol-Ark Inverter Type."""
-
-    LEAD_ACID = 0
-    LITHIUM = 1
-    UNKNOWN = 9
-
-
-class Plant_Type(Enum):
-    """Sol-Ark Plant Type."""
-
-    ENERGY_STORAGE_SYSTEM_AC = 0
-    GRID_TIED = 1
-    ENERGY_STORAGE_SYSTEM_DC = 2
     UNKNOWN = 9
 
 
