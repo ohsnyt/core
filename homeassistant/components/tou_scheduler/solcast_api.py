@@ -35,9 +35,36 @@ else:
     logger.setLevel(logging.INFO)
 
 
-class SolcastAPI:
-    """Class to handle Solcast API calls and data processing for the Time of Use integration."""
+# Helper functions
+def printable_hour(hour: int) -> str:
+    """Return a printable hour string in 12-hour format with 'am' or 'pm' suffix.
 
+    Args:
+        hour: Hour in 24-hour format (0-23).
+
+    Returns:
+        Formatted string in 12-hour format with am/pm.
+
+    """
+    return (
+        f"{'\u00a0' if (hour%12 < 10 and hour > 0) else ''}"
+        f"{(hour % 12) or 12}"
+        f"{'am' if hour < 12 else 'pm'}"
+    )
+
+
+class SolcastAPI:
+    """Class to handle Solcast API calls and data processing for the Time of Use integration.
+
+    The class contains:
+      - 1 constructor to initialize the TOU Scheduler.
+      - 3 public methods
+        a) Get the estimate for the current hour PV generation.
+        b) Get the sun status for the previous hour.
+        c) Refresh Solcast data.
+    """
+
+    # Constructor
     def __init__(self, api_key: str, resource_id: str, timezone: str) -> None:
         """Initialize key variables for API calls and data calculations.
 
@@ -62,6 +89,7 @@ class SolcastAPI:
         self.percentile = DEFAULT_SOLCAST_PERCENTILE
         self.update_hours = DEFAULT_SOLCAST_UPDATE_HOURS
 
+    # Public methods
     def get_current_hour_pv_estimate(self) -> float:
         """Get the estimate for the current hour PV."""
         current_hour = datetime.now(ZoneInfo(self.timezone)).strftime("%Y-%m-%d-%H")
@@ -69,7 +97,7 @@ class SolcastAPI:
         return round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0)
 
     def get_last_hour_sun_estimate(self) -> float:
-        """Get the sun status for the current hour."""
+        """Get the sun status for the previous hour."""
         current_hour = (
             datetime.now(ZoneInfo(self.timezone)) - timedelta(hours=1)
         ).strftime("%Y-%m-%d-%H")
@@ -202,29 +230,3 @@ class SolcastStatus(Enum):
     API_NORMAL = 2
     CANNOT_READ = 3
     UNKNOWN = 9
-
-
-class SunStatus(Enum):
-    """Sun status for the current hour."""
-
-    DARK = 0
-    PARTIAL = 1
-    FULL = 2
-    UNKNOWN = 9
-
-
-def printable_hour(hour: int) -> str:
-    """Return a printable hour string in 12-hour format with 'am' or 'pm' suffix.
-
-    Args:
-        hour: Hour in 24-hour format (0-23).
-
-    Returns:
-        Formatted string in 12-hour format with am/pm.
-
-    """
-    return (
-        f"{'\u00a0' if (hour%12 < 10 and hour > 0) else ''}"
-        f"{(hour % 12) or 12}"
-        f"{'am' if hour < 12 else 'pm'}"
-    )
