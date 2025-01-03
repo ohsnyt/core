@@ -1,8 +1,11 @@
 """Entity classes for TOU Scheduler entity.
 
 This module defines various entity classes used in the TOU (Time of Use) Scheduler integration.
-Each entity class represents a different aspect of the TOU Scheduler, such as battery, plant, inverter, shading, cloud, and load.
-These entities are used to monitor and manage different components of a solar power system, providing information such as shading ratios, battery status, plant information, and average daily load.
+(These are specialized sensors.)
+Each entity class represents a different aspect of the TOU Scheduler that is of special interest to the user:
+    the scheduler,
+    the calculated daily shading, and
+    the calculated average daily load.
 """
 
 import ast
