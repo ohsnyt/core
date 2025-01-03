@@ -96,7 +96,7 @@ class SolcastAPI:
             bool: True if the data was successfully refreshed, False if we did nothing.
 
         """
-        now = datetime.now(ZoneInfo(self.timezone))
+        now: datetime = datetime.now(ZoneInfo(self.timezone))
         # If we have already updated today but it isn't the right hour to refresh, return.
         if (
             self.data_updated
@@ -104,8 +104,10 @@ class SolcastAPI:
             and (now.hour not in self.update_hours)
         ):
             return False
-        # So either we haven't done an update today, or it is the right hour to update...
-        # Get data from the API.
+
+        # Set the update date to now so that even if the api call fails, we don't try again until the next hour.
+        self.data_updated = now
+        # Try to get data from the API.
         raw_forecast: dict[str, str | float] = {}
         try:
             # Build the url
@@ -187,7 +189,6 @@ class SolcastAPI:
             for _, row in df.iterrows()
         }  # All done
         self.status = SolcastStatus.API_NORMAL
-        self.data_updated = datetime.now(ZoneInfo(self.timezone))
         return True
 
 

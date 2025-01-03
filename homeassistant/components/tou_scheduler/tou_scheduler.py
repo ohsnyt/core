@@ -189,9 +189,10 @@ class TOUScheduler:
 
         # Compute remaining battery life for the user
         await self._calculate_tou_battery_remaining_time()
-
         # Update the next update time to ten past the next hour
-        self._update_time = current_time.replace(minute=10, second=0, microsecond=0)
+        self._update_time = current_time.replace(
+            minute=10, second=0, microsecond=0
+        ) + timedelta(hours=1)
 
     async def update_sensors(self) -> dict[str, int | float | str]:
         """Update the sensors every 5 minutes with the latest data."""
