@@ -4,19 +4,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-import json
 import logging
 import os
 from pathlib import Path
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
-import aiofiles
 import pandas as pd
 
 from homeassistant.components.recorder import get_instance, statistics
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from .const import (
     DEBUGGING,
@@ -24,6 +23,8 @@ from .const import (
     DEFAULT_GRID_BOOST_MIDNIGHT_SOC,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
+    FORECAST_KEY,
+    SHADE_KEY,
 )
 from .solark_inverter_api import InverterAPI
 from .solcast_api import SolcastAPI
@@ -56,6 +57,8 @@ class TOUScheduler:
         self.config_entry = config_entry
         self.timezone = timezone
         self.status = "Starting"
+        self.store_shade: Store = Store(hass, version=1, key=SHADE_KEY)
+        self.store_forecast: Store = Store(hass, version=1, key=FORECAST_KEY)
 
         # Here is the inverter info
         self.inverter_api: InverterAPI = inverter_api
@@ -129,10 +132,30 @@ class TOUScheduler:
                 if self.inverter_api.bearer_token_expires_on
                 else "unknown"
             ),
-            # Shading data
+            # Daily data
             "shading": str(self.daily_shading),
             "load": str(self.daily_load_averages),
         }
+
+    async def async_load_shading(self):
+        """Load shading data from storage."""
+        data = await self.store_shade.async_load()
+        if data is not None:
+            self.daily_shading = data
+
+    async def async_save_shading(self):
+        """Save shading data to storage."""
+        await self.store_shade.async_save(self.daily_shading)
+
+    async def async_load_forecast(self):
+        """Load forecast data from storage."""
+        data = await self.store_forecast.async_load()
+        if data is not None:
+            self.solcast_api.forecast = data
+
+    async def async_save_forecast(self):
+        """Save forecast data to storage."""
+        await self.store_forecast.async_save(self.solcast_api.forecast)
 
     async def _hourly_updates(self) -> None:
         """Update the hourly data for the sensors after 10 past the hour."""
@@ -151,8 +174,9 @@ class TOUScheduler:
         #  Compute remaining battery life...
         await self._calculate_tou_battery_remaining_time()
 
-        #  Compute off-peak grid boost if the grid boost SoC changed
+        # Save the forecast data if it was updated and compute off-peak grid boost
         if self._update_tou_boost:
+            await self.async_save_forecast()
             await self._calculate_tou_boost_soc()
             self._update_tou_boost = False
 
@@ -172,6 +196,7 @@ class TOUScheduler:
         await self.inverter_api.refresh_data()
 
         # Try to update the Solcast data (true if successful at startup and as per user schedule)
+        #  (Save the update flag for use in the hourly update)
         self._update_tou_boost = await self.solcast_api.refresh_data()
 
         # Do hourly updates
@@ -187,22 +212,39 @@ class TOUScheduler:
             logger.error("Config entry is not set.")
             return
 
+        # Load the shading data from storage
+        await self.async_load_shading()
+        # Load the forecast data from storage
+        await self.async_load_forecast()
+        if self.solcast_api.forecast:
+            # Get the key with the lowest value
+            lowest_key = min(self.solcast_api.forecast.keys())
+            logger.debug(
+                "First (lowest) key in forecast: %s -> %s", lowest_key, lowest_key
+            )
+            # Get the first period_end from the forecast data and set the data_updated date to this date
+            self.solcast_api.data_updated = datetime.strptime(
+                lowest_key, "%Y-%m-%d-%H"
+            ) - timedelta(hours=1)
         # Try to read the shading file.
-        try:
-            async with aiofiles.open(self._shading_file_path, encoding="utf-8") as file:
-                file_content = await file.read()
-                shading = json.loads(file_content)
-                if not shading:
-                    logger.info("No shading data available in the file at startup.")
-                else:
-                    self.daily_shading = {
-                        int(hour): value for hour, value in shading.items()
-                    }
-                    logger.info("Shading file read at startup.")
-        except FileNotFoundError:
-            logger.warning("Shading file not found at startup.")
-        except json.JSONDecodeError:
-            logger.error("Error decoding shading file at startup.")
+        # try:
+        #     async with aiofiles.open(self._shading_file_path, encoding="utf-8") as file:
+        #         file_content = await file.read()
+        #         shading = json.loads(file_content)
+        #         if not shading:
+        #             logger.info("No shading data available in the file at startup.")
+        #         else:
+        #             self.daily_shading = {
+        #                 int(hour): value for hour, value in shading.items()
+        #             }
+        #             logger.info("Shading file read at startup.")
+        # except FileNotFoundError:
+        #     logger.warning("Shading file not found at startup.")
+        # except json.JSONDecodeError:
+        #     logger.error("Error decoding shading file at startup.")
+
+        # TEMP: Writing the shading data to the store
+        await self.async_save_shading()
 
         # Load the options from the config entry
         if self.config_entry.options:
@@ -285,12 +327,16 @@ class TOUScheduler:
                 last_hour,
                 shading,
             )
+
+            # Write the shading to the hass storage
+            await self.async_save_shading()
+
             # Write the shading to a file
-            async with aiofiles.open(
-                self._shading_file_path, "w", encoding="utf-8"
-            ) as file:
-                await file.write(json.dumps(self.daily_shading))
-                logger.info("Shading file updated.")
+            # async with aiofiles.open(
+            #     self._shading_file_path, "w", encoding="utf-8"
+            # ) as file:
+            #     await file.write(json.dumps(self.daily_shading))
+            #     logger.info("Shading file updated.")
         self._current_hour = datetime.now(ZoneInfo(self.timezone)).hour
 
     async def _calculate_load_estimates(self) -> None:
@@ -413,7 +459,7 @@ class TOUScheduler:
         logger.info(
             "At %s: Estimating %.1f hours of battery life.",
             starting_time,
-            round(minutes / 60, 1),
+            minutes / 60,
         )
 
     async def _calculate_tou_boost_soc(self) -> None:

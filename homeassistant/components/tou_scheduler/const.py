@@ -16,6 +16,9 @@ DEBUGGING = True
 
 # Define a key for storing the coordinator in hass.data
 COORDINATOR_KEY = "tou_coordinator"
+# Storage keys for the Tou Scheduler data
+SHADE_KEY = "tou_scheduler_storage"
+FORECAST_KEY = "tou_scheduler_forecast"
 
 # Define Solark data cloud key constants
 CLOUD_URL = "https://solarkcloud.com"

@@ -136,9 +136,14 @@ class ShadingEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, str]:
         """Return the hourly shade values as dict[str,str]."""
-        hours = ast.literal_eval(self._coordinator.data.get("shading", "{}"))
-        attributes = {
-            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12:2} {'am' if hour < 12 else 'pm'}": f"{int(round(value,2)*100)}%"
+        hours = {
+            int(hour): value
+            for hour, value in ast.literal_eval(
+                self._coordinator.data.get("shading", "{}")
+            ).items()
+        }
+        attributes: dict[str, str] = {
+            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12:2} {'am' if hour < 12 else 'pm'}": f"{int(round(value, 2) * 100)}%"
             for hour, value in hours.items()
         }
         if not attributes:
