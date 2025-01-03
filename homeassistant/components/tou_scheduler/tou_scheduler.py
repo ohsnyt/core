@@ -34,13 +34,42 @@ else:
     logger.setLevel(logging.INFO)
 
 
+# Helper functions
 def string_to_int_list(string_list) -> list[int]:
     """Convert a string containing one or more integers into a list of ints."""
     return [int(i.strip()) for i in string_list.split(",") if i.strip().isdigit()]
 
 
+def printable_hour(hour: int) -> str:
+    """Return a printable hour string in 12-hour format with 'am' or 'pm' suffix.
+
+    Takes an integer and returns a formatted string in 12-hour format with am/pm.
+    """
+    # Check for invalid hour and just return the number as a string
+    if hour < 0 or hour > 23:
+        return str(hour)
+    return (
+        f"{'\u00a0' if ((hour%12 < 10) and hour%12 > 0) else ''}"
+        f"{(hour % 12) or 12}"
+        f"{'am' if hour < 12 else 'pm'}"
+    )
+
+
 class TOUScheduler:
-    """Class to manage Time of Use (TOU) scheduling for Home Assistant."""
+    """Class to manage Time of Use (TOU) scheduling for Home Assistant.
+
+    The class contains:
+      - 1 constructor to initialize the TOU Scheduler.
+      - 7 methods to manage data loading, saving, and requesting data from Home Assistant.
+      - 3 methods to manage options changes by the user.
+      - 4 private calculation methods.
+      - 1 private method to update certain data every hour.
+      - 3 public method
+      - 3  public methods to start the TOU Scheduler:
+        a)  Load data and run necessary functions when starting the TOU Scheduler.
+        b)  Update the sensor data every 5 minutes with the latest data.
+        c)  Pass the sensor dictionary data to Home Assistant.
+    """
 
     def __init__(
         self,
@@ -83,58 +112,7 @@ class TOUScheduler:
         self.days_of_load_history: int = DEFAULT_GRID_BOOST_HISTORY
         self._update_tou_boost: bool = False
 
-    def to_dict(self) -> dict[str, float | str]:
-        """Return this sensor data as a dictionary.
-
-        This method provides expected battery life statistics and the grid boost value for the upcoming day.
-        It also returns the inverter_api data and the solcast_api data.
-
-        Returns:
-            dict[str, Any]: A dictionary containing the sensor data.
-
-        """
-        # Get the current hour
-        hour = datetime.now(ZoneInfo(self.inverter_api.timezone)).hour
-
-        return {
-            "status": self._boost,
-            "batt_time": self.batt_minutes_remaining / 60,
-            "grid_boost_soc": self.grid_boost_starting_soc,
-            "grid_boost_start": self.grid_boost_start,
-            "grid_boost_on": self._boost,
-            "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
-            # Inverter data
-            "data_updated": self.inverter_api.data_updated
-            if self.inverter_api.data_updated
-            else "unknown",
-            "batt_wh_usable": self.inverter_api.batt_wh_usable or "0",
-            "batt_soc": self.inverter_api.realtime_battery_soc,
-            "power_battery": self.inverter_api.realtime_battery_power,
-            "power_grid": self.inverter_api.realtime_grid_power,
-            "power_load": self.inverter_api.realtime_load_power,
-            "power_pv": self.inverter_api.realtime_pv_power,
-            "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(),
-            # Inverter info
-            "inverter_model": self.inverter_api.inverter_model or "unknown",
-            "inverter_status": str(self.inverter_api.inverter_status),
-            "inverter_serial_number": self.inverter_api.inverter_serial_number
-            or "unknown",
-            # Plant info
-            "plant_id": self.inverter_api.plant_id or "unknown",
-            "plant_created": str(self.inverter_api.plant_created.date())
-            if self.inverter_api.plant_created
-            else "unknown",
-            "plant_name": self.inverter_api.plant_name or "unknown",
-            "bearer_token_expires_on": str(
-                self.inverter_api.bearer_token_expires_on.date()
-                if self.inverter_api.bearer_token_expires_on
-                else "unknown"
-            ),
-            # Daily data
-            "shading": str(self.daily_shading),
-            "load": str(self.daily_load_averages),
-        }
-
+    # Data loading and saving
     async def async_load_shading(self):
         """Load shading data from storage."""
         data = await self.store_shade.async_load()
@@ -155,88 +133,91 @@ class TOUScheduler:
         """Save forecast data to storage."""
         await self.store_forecast.async_save(self.solcast_api.forecast)
 
-    async def _hourly_updates(self) -> None:
-        """Update the hourly data for the sensors after 10 past the hour.
+    async def _request_ha_statistics(
+        self, entity_ids: set[str], days: int
+    ) -> defaultdict:
+        """Request the mean hourly statistics for the given entity_id using units unit for the number of days specified.
 
-        We need to update the following data:
-        - Solcast forecast data
-        - Daily shading data
-        - Off-peak grid boost SoC
-        - Remaining battery life
+        This uses a background task to prevent thread blocking.
         """
+        # Initialize the start and end date range for yesterday
+        if self.inverter_api is None:
+            logger.error("Cannot request HA statistics. Inverter API is not set")
+            return defaultdict()
 
-        # Skip if we are not at the update time
-        current_time = datetime.now(ZoneInfo(self.timezone))
-        if current_time < self._update_time:
-            return
+        now = datetime.now(ZoneInfo(self.inverter_api.timezone))
+        end_time = datetime.combine(now.date(), datetime.min.time()).replace(
+            tzinfo=ZoneInfo(self.inverter_api.timezone)
+        )
+        start_time = end_time - timedelta(days=int(days))
 
-        # Update the daily load estimates (once a day, managed by the load_estimates_updated date)
-        await self._calculate_load_estimates()
+        # Convert start_time and end_time to UTC
+        start_time_utc = start_time.astimezone(ZoneInfo("UTC"))
+        end_time_utc = end_time.astimezone(ZoneInfo("UTC"))
 
-        # See if we need to update the Solcast data (true if successful at startup and as per user schedule)
-        #  (Save the update flag for use in the hourly update)
-        self._update_tou_boost = await self.solcast_api.refresh_data()
+        # Log the request
+        logger.debug(
+            "Statistics for %s gathered from %s until %s.",
+            entity_ids,
+            start_time_utc.strftime("%a at %-I %p"),
+            end_time_utc.strftime("%a at %-I %p"),
+        )
 
-        # Update the hourly shading values
-        await self._calculate_shading()
+        return await get_instance(self.hass).async_add_executor_job(
+            self._get_statistics_during_period,
+            start_time_utc,
+            end_time_utc,
+            entity_ids,
+        )
 
-        # If the forecast data if it was updated, save it and compute off-peak grid boost based on new
-        #  forecast data and shading data
-        if self._update_tou_boost:
-            await self.async_save_forecast()
-            await self._calculate_tou_boost_soc()
-            self._update_tou_boost = False
+    async def _get_pv_statistic_for_last_hour(self) -> float:
+        """Get the mean PV power for the last hour."""
+        # Set the sensor entity_id and the start and end time to get the last hour's statistics
+        entity_id = f"sensor.{self.inverter_api.plant_id}_tou_power_pv"
+        now = datetime.now(ZoneInfo(self.inverter_api.timezone))
+        start_of_last_hour = now.replace(minute=0, second=0, microsecond=0) - timedelta(
+            hours=1
+        )
+        end_of_last_hour = (
+            start_of_last_hour + timedelta(hours=1) - timedelta(microseconds=1)
+        )
 
-        # Compute remaining battery life for the user
-        await self._calculate_tou_battery_remaining_time()
-        # Update the next update time to ten past the next hour
-        self._update_time = current_time.replace(
-            minute=10, second=0, microsecond=0
-        ) + timedelta(hours=1)
+        # Get the statistics for the last hour
+        stats = await get_instance(self.hass).async_add_executor_job(
+            self._get_statistics_during_period,
+            start_of_last_hour,
+            end_of_last_hour,
+            {entity_id},
+        )
 
-    async def update_sensors(self) -> dict[str, int | float | str]:
-        """Update the sensors every 5 minutes with the latest data."""
-        # Set status to indicate we are working - May not be needed
-        self.status = "Working"
+        # Extract the mean value for the entity_id
+        mean_value = stats.get(entity_id, [{}])[0].get("mean", 0.0)
+        logger.debug(
+            ">>>>PV power generation at %s was %s wH<<<<",
+            printable_hour(start_of_last_hour.hour),
+            mean_value,
+        )
+        return mean_value
 
-        # Update the inverter data for the sensors (done every 5 minutes)
-        #   (This must be done first because the other updates depend on current inverter data, especially at startup)
-        await self.inverter_api.refresh_data()
+    def _get_statistics_during_period(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        entity_ids: set[str],
+    ) -> defaultdict:
+        """Get statistics during the specified period."""
+        stats = statistics.statistics_during_period(
+            self.hass,
+            start_time,
+            end_time,
+            entity_ids,
+            "hour",
+            None,
+            {"mean"},
+        )
+        return defaultdict(list, stats)
 
-        # Do hourly updates
-        await self._hourly_updates()
-        # Return the updated sensor data
-        return self.to_dict()
-
-    async def async_start(self) -> None:
-        """Set up the config options callback when starting the TOU Scheduler."""
-        # Ensure config_entry is set
-        if not self.config_entry:
-            logger.error("Config entry is not set.")
-            return
-
-        # Get (Calculate) the daily load estimates
-        await self._calculate_load_estimates()
-        # Load the shading data from storage
-        await self.async_load_shading()
-        # Load the forecast data from storage and set the data_updated date if we have forecast data
-        await self.async_load_forecast()
-        if self.solcast_api.forecast:
-            # Get the key with the lowest value
-            lowest_key = min(self.solcast_api.forecast.keys())
-            logger.debug(
-                "First (lowest) key in forecast: %s -> %s", lowest_key, lowest_key
-            )
-            # Get the first period_end from the forecast data and set the data_updated date to this date
-            self.solcast_api.data_updated = datetime.strptime(
-                lowest_key, "%Y-%m-%d-%H"
-            ) - timedelta(hours=1)
-        # Load the options from the config entry
-        if self.config_entry.options:
-            await self._handle_options_dialog(self.hass, self.config_entry)
-        # Listen for changes to the options and update the cloud object
-        self.config_entry.add_update_listener(self._options_callback)
-
+    # Methods to manage options changes by the user
     async def _handle_options_dialog(
         self, hass: HomeAssistant, config_entry: ConfigEntry
     ) -> None:
@@ -273,6 +254,7 @@ class TOUScheduler:
         logger.debug("Options updated: %s", config_entry.options)
         await self._handle_options_dialog(hass, config_entry)
 
+    # Private calculation methods
     async def _calculate_shading(self) -> None:
         """Calculate the shading each hour.
 
@@ -291,9 +273,9 @@ class TOUScheduler:
         pv_average = await self._get_pv_statistic_for_last_hour()
 
         logger.debug(
-            "Average PV power for the past hour: %s, current sun estimate is: %.2f",
+            "Average PV power for the past hour: %s, last sun estimate is: %.2f",
             pv_average,
-            self.solcast_api.get_current_hour_sun_estimate(),
+            self.solcast_api.get_last_hour_sun_estimate(),
         )
         # Update shading if we had a positive average PV power, battery soc is low enough to allow charging, and the sun was full
         last_hour = (datetime.now(ZoneInfo(self.timezone)).hour - 1) % 24
@@ -301,16 +283,17 @@ class TOUScheduler:
             pv_average > 0
             and self.solcast_api.get_current_hour_pv_estimate() > 0
             and self.inverter_api.realtime_battery_soc < 96
-            and self.solcast_api.get_current_hour_sun_estimate() > 0.95
+            and self.solcast_api.get_last_hour_sun_estimate() > 0.95
         ):
             shading = 1 - min(
                 pv_average / self.solcast_api.get_current_hour_pv_estimate(), 1
             )
             self.daily_shading[last_hour] = shading
             logger.info(
-                "Shading for %s changed to %s",
+                "Shading for %s changed to %s. Last hour sun estimate is %.2f",
                 last_hour,
                 shading,
+                self.solcast_api.get_last_hour_sun_estimate(),
             )
 
             # Write the shading to the hass storage
@@ -517,103 +500,138 @@ class TOUScheduler:
             self._boost, self.grid_boost_starting_soc
         )
 
-    async def _request_ha_statistics(
-        self, entity_ids: set[str], days: int
-    ) -> defaultdict:
-        """Request the mean hourly statistics for the given entity_id using units unit for the number of days specified.
+    # Private hourly update method (called by update_sensors)
+    async def _hourly_updates(self) -> None:
+        """Update the hourly data for the sensors after 10 past the hour.
 
-        This uses a background task to prevent thread blocking.
+        We need to update the following data:
+        - Solcast forecast data
+        - Daily shading data
+        - Off-peak grid boost SoC
+        - Remaining battery life
         """
-        # Initialize the start and end date range for yesterday
-        if self.inverter_api is None:
-            logger.error("Cannot request HA statistics. Inverter API is not set")
-            return defaultdict()
 
-        now = datetime.now(ZoneInfo(self.inverter_api.timezone))
-        end_time = datetime.combine(now.date(), datetime.min.time()).replace(
-            tzinfo=ZoneInfo(self.inverter_api.timezone)
-        )
-        start_time = end_time - timedelta(days=int(days))
+        # Skip if we are not at the update time
+        current_time = datetime.now(ZoneInfo(self.timezone))
+        if current_time < self._update_time:
+            return
 
-        # Convert start_time and end_time to UTC
-        start_time_utc = start_time.astimezone(ZoneInfo("UTC"))
-        end_time_utc = end_time.astimezone(ZoneInfo("UTC"))
+        # Update the daily load estimates (once a day, managed by the load_estimates_updated date)
+        await self._calculate_load_estimates()
 
-        # Log the request
-        logger.debug(
-            "Statistics for %s gathered from %s until %s.",
-            entity_ids,
-            start_time_utc.strftime("%a at %-I %p"),
-            end_time_utc.strftime("%a at %-I %p"),
-        )
+        # See if we need to update the Solcast data (true if successful at startup and as per user schedule)
+        #  (Save the update flag for use in the hourly update)
+        self._update_tou_boost = await self.solcast_api.refresh_data()
 
-        return await get_instance(self.hass).async_add_executor_job(
-            self._get_statistics_during_period,
-            start_time_utc,
-            end_time_utc,
-            entity_ids,
-        )
+        # Update the hourly shading values
+        await self._calculate_shading()
 
-    async def _get_pv_statistic_for_last_hour(self) -> float:
-        """Get the mean PV power for the last hour."""
-        # Set the sensor entity_id and the start and end time to get the last hour's statistics
-        entity_id = f"sensor.{self.inverter_api.plant_id}_tou_power_pv"
-        now = datetime.now(ZoneInfo(self.inverter_api.timezone))
-        start_of_last_hour = now.replace(minute=0, second=0, microsecond=0) - timedelta(
-            hours=1
-        )
-        end_of_last_hour = (
-            start_of_last_hour + timedelta(hours=1) - timedelta(microseconds=1)
-        )
+        # If the forecast data if it was updated, save it and compute off-peak grid boost based on new
+        #  forecast data and shading data
+        if self._update_tou_boost:
+            await self.async_save_forecast()
+            await self._calculate_tou_boost_soc()
+            self._update_tou_boost = False
 
-        # Get the statistics for the last hour
-        stats = await get_instance(self.hass).async_add_executor_job(
-            self._get_statistics_during_period,
-            start_of_last_hour,
-            end_of_last_hour,
-            {entity_id},
-        )
+        # Compute remaining battery life for the user
+        await self._calculate_tou_battery_remaining_time()
+        # Update the next update time to ten past the next hour
+        self._update_time = current_time.replace(
+            minute=10, second=0, microsecond=0
+        ) + timedelta(hours=1)
 
-        # Extract the mean value for the entity_id
-        mean_value = stats.get(entity_id, [{}])[0].get("mean", 0.0)
-        logger.debug(
-            ">>>>PV power generation at %s was %s wH<<<<",
-            printable_hour(start_of_last_hour.hour),
-            mean_value,
-        )
-        return mean_value
+    # Public methods
+    async def async_start(self) -> None:
+        """Set up the config options callback when starting the TOU Scheduler."""
+        # Ensure config_entry is set
+        if not self.config_entry:
+            logger.error("Config entry is not set.")
+            return
 
-    def _get_statistics_during_period(
-        self,
-        start_time: datetime,
-        end_time: datetime,
-        entity_ids: set[str],
-    ) -> defaultdict:
-        """Get statistics during the specified period."""
-        stats = statistics.statistics_during_period(
-            self.hass,
-            start_time,
-            end_time,
-            entity_ids,
-            "hour",
-            None,
-            {"mean"},
-        )
-        return defaultdict(list, stats)
+        # Get (Calculate) the daily load estimates
+        await self._calculate_load_estimates()
+        # Load the shading data from storage
+        await self.async_load_shading()
+        # Load the forecast data from storage and set the data_updated date if we have forecast data
+        await self.async_load_forecast()
+        if self.solcast_api.forecast:
+            # Get the key with the lowest value
+            lowest_key = min(self.solcast_api.forecast.keys())
+            logger.debug(
+                "First (lowest) key in forecast: %s -> %s", lowest_key, lowest_key
+            )
+            # Get the first period_end from the forecast data and set the data_updated date to this date
+            self.solcast_api.data_updated = datetime.strptime(
+                lowest_key, "%Y-%m-%d-%H"
+            ) - timedelta(hours=1)
+        # Load the options from the config entry
+        if self.config_entry.options:
+            await self._handle_options_dialog(self.hass, self.config_entry)
+        # Listen for changes to the options and update the cloud object
+        self.config_entry.add_update_listener(self._options_callback)
 
+    async def update_sensors(self) -> dict[str, int | float | str]:
+        """Update the sensors every 5 minutes with the latest data."""
+        # Set status to indicate we are working - May not be needed
+        self.status = "Working"
 
-def printable_hour(hour: int) -> str:
-    """Return a printable hour string in 12-hour format with 'am' or 'pm' suffix.
+        # Update the inverter data for the sensors (done every 5 minutes)
+        #   (This must be done first because the other updates depend on current inverter data, especially at startup)
+        await self.inverter_api.refresh_data()
 
-    Args:
-        hour: Hour in 24-hour format (0-23).
+        # Do hourly updates
+        await self._hourly_updates()
+        # Return the updated sensor data
+        return self.to_dict()
 
-    Returns:
-        Formatted string in 12-hour format with am/pm.
+    def to_dict(self) -> dict[str, float | str]:
+        """Return this sensor data as a dictionary.
 
-    """
-    return (
-        f"{'\u00a0' if ((hour%12 < 10) and hour%12 > 0) else ''}"
-        f"{(hour % 12) or 12}"
-        f"{'am' if hour < 12 else 'pm'}"
-    )
+        This method provides expected battery life statistics and the grid boost value for the upcoming day.
+        It also returns the inverter_api data and the solcast_api data.
+
+        Returns:
+            dict[str, Any]: A dictionary containing the sensor data.
+
+        """
+        # Get the current hour
+        hour = datetime.now(ZoneInfo(self.inverter_api.timezone)).hour
+
+        return {
+            "status": self._boost,
+            "batt_time": self.batt_minutes_remaining / 60,
+            "grid_boost_soc": self.grid_boost_starting_soc,
+            "grid_boost_start": self.grid_boost_start,
+            "grid_boost_on": self._boost,
+            "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
+            # Inverter data
+            "data_updated": self.inverter_api.data_updated
+            if self.inverter_api.data_updated
+            else "unknown",
+            "batt_wh_usable": self.inverter_api.batt_wh_usable or "0",
+            "batt_soc": self.inverter_api.realtime_battery_soc,
+            "power_battery": self.inverter_api.realtime_battery_power,
+            "power_grid": self.inverter_api.realtime_grid_power,
+            "power_load": self.inverter_api.realtime_load_power,
+            "power_pv": self.inverter_api.realtime_pv_power,
+            "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(),
+            # Inverter info
+            "inverter_model": self.inverter_api.inverter_model or "unknown",
+            "inverter_status": str(self.inverter_api.inverter_status),
+            "inverter_serial_number": self.inverter_api.inverter_serial_number
+            or "unknown",
+            # Plant info
+            "plant_id": self.inverter_api.plant_id or "unknown",
+            "plant_created": str(self.inverter_api.plant_created.date())
+            if self.inverter_api.plant_created
+            else "unknown",
+            "plant_name": self.inverter_api.plant_name or "unknown",
+            "bearer_token_expires_on": str(
+                self.inverter_api.bearer_token_expires_on.date()
+                if self.inverter_api.bearer_token_expires_on
+                else "unknown"
+            ),
+            # Daily data
+            "shading": str(self.daily_shading),
+            "load": str(self.daily_load_averages),
+        }

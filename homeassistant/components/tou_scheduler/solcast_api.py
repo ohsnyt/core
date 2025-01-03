@@ -13,7 +13,7 @@ Classes:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 import logging
 from zoneinfo import ZoneInfo
@@ -68,9 +68,11 @@ class SolcastAPI:
         # Return the current hour estimate
         return round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0)
 
-    def get_current_hour_sun_estimate(self) -> float:
+    def get_last_hour_sun_estimate(self) -> float:
         """Get the sun status for the current hour."""
-        current_hour = datetime.now(ZoneInfo(self.timezone)).strftime("%Y-%m-%d-%H")
+        current_hour = (
+            datetime.now(ZoneInfo(self.timezone)) - timedelta(hours=1)
+        ).strftime("%Y-%m-%d-%H")
         # Return the current hour estimate
         logger.debug(
             "Sun ratio for %s is %s",
