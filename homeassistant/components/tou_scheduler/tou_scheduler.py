@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 import logging
-import os
-from pathlib import Path
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
@@ -59,6 +57,10 @@ class TOUScheduler:
         self.status = "Starting"
         self.store_shade: Store = Store(hass, version=1, key=SHADE_KEY)
         self.store_forecast: Store = Store(hass, version=1, key=FORECAST_KEY)
+        # Update_hour helps us do updates just once an hour - indicates ten past the hour for the next update
+        self._update_time = datetime.now(ZoneInfo(self.timezone)).replace(
+            minute=10, second=0, microsecond=0
+        )
 
         # Here is the inverter info
         self.inverter_api: InverterAPI = inverter_api
@@ -71,10 +73,6 @@ class TOUScheduler:
 
         # Here is the shading info: default to 0.0 for each hour of the day and no last update date
         self.daily_shading: dict[int, float] = {hour: 0.0 for hour in range(24)}
-        self._current_hour: int = (
-            datetime.now(ZoneInfo(self.timezone)).hour - 1
-        )  # This is used to update some data once per hour
-        self._shading_file_path = Path(os.path.dirname(__file__)) / "shading.data"
 
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
@@ -158,50 +156,54 @@ class TOUScheduler:
         await self.store_forecast.async_save(self.solcast_api.forecast)
 
     async def _hourly_updates(self) -> None:
-        """Update the hourly data for the sensors after 10 past the hour."""
-        # Check if we are at least 10 minutes past the hour
+        """Update the hourly data for the sensors after 10 past the hour.
+
+        We need to update the following data:
+        - Solcast forecast data
+        - Daily shading data
+        - Off-peak grid boost SoC
+        - Remaining battery life
+        """
+
+        # Skip if we are not at the update time
         current_time = datetime.now(ZoneInfo(self.timezone))
-        if current_time.minute < 10:
+        if current_time < self._update_time:
             return
 
-        # If we have already calculated shading for this hour, return
-        if self._current_hour == current_time.hour:
-            return
+        # Update the daily load estimates (once a day, managed by the load_estimates_updated date)
+        await self._calculate_load_estimates()
 
-        # Update our daily shading values (various parts done at different schedules)
+        # See if we need to update the Solcast data (true if successful at startup and as per user schedule)
+        #  (Save the update flag for use in the hourly update)
+        self._update_tou_boost = await self.solcast_api.refresh_data()
+
+        # Update the hourly shading values
         await self._calculate_shading()
 
-        #  Compute remaining battery life...
-        await self._calculate_tou_battery_remaining_time()
-
-        # Save the forecast data if it was updated and compute off-peak grid boost
+        # If the forecast data if it was updated, save it and compute off-peak grid boost based on new
+        #  forecast data and shading data
         if self._update_tou_boost:
             await self.async_save_forecast()
             await self._calculate_tou_boost_soc()
             self._update_tou_boost = False
 
-        self._current_hour = current_time.hour
+        # Compute remaining battery life for the user
+        await self._calculate_tou_battery_remaining_time()
+
+        # Update the next update time to ten past the next hour
+        self._update_time = current_time.replace(minute=10, second=0, microsecond=0)
 
     async def update_sensors(self) -> dict[str, int | float | str]:
-        """Update the sensors with the latest data and return the updated sensor data as a dictionary."""
+        """Update the sensors every 5 minutes with the latest data."""
         # Set status to indicate we are working - May not be needed
         self.status = "Working"
 
-        # Update the hourly load estimates (once a day)
-        await self._calculate_load_estimates()
-
         # Update the inverter data for the sensors (done every 5 minutes)
         #   (This must be done first because the other updates depend on current inverter data, especially at startup)
-
         await self.inverter_api.refresh_data()
-
-        # Try to update the Solcast data (true if successful at startup and as per user schedule)
-        #  (Save the update flag for use in the hourly update)
-        self._update_tou_boost = await self.solcast_api.refresh_data()
 
         # Do hourly updates
         await self._hourly_updates()
-
         # Return the updated sensor data
         return self.to_dict()
 
@@ -212,9 +214,11 @@ class TOUScheduler:
             logger.error("Config entry is not set.")
             return
 
+        # Get (Calculate) the daily load estimates
+        await self._calculate_load_estimates()
         # Load the shading data from storage
         await self.async_load_shading()
-        # Load the forecast data from storage
+        # Load the forecast data from storage and set the data_updated date if we have forecast data
         await self.async_load_forecast()
         if self.solcast_api.forecast:
             # Get the key with the lowest value
@@ -226,26 +230,6 @@ class TOUScheduler:
             self.solcast_api.data_updated = datetime.strptime(
                 lowest_key, "%Y-%m-%d-%H"
             ) - timedelta(hours=1)
-        # Try to read the shading file.
-        # try:
-        #     async with aiofiles.open(self._shading_file_path, encoding="utf-8") as file:
-        #         file_content = await file.read()
-        #         shading = json.loads(file_content)
-        #         if not shading:
-        #             logger.info("No shading data available in the file at startup.")
-        #         else:
-        #             self.daily_shading = {
-        #                 int(hour): value for hour, value in shading.items()
-        #             }
-        #             logger.info("Shading file read at startup.")
-        # except FileNotFoundError:
-        #     logger.warning("Shading file not found at startup.")
-        # except json.JSONDecodeError:
-        #     logger.error("Error decoding shading file at startup.")
-
-        # TEMP: Writing the shading data to the store
-        await self.async_save_shading()
-
         # Load the options from the config entry
         if self.config_entry.options:
             await self._handle_options_dialog(self.hass, self.config_entry)
@@ -330,14 +314,6 @@ class TOUScheduler:
 
             # Write the shading to the hass storage
             await self.async_save_shading()
-
-            # Write the shading to a file
-            # async with aiofiles.open(
-            #     self._shading_file_path, "w", encoding="utf-8"
-            # ) as file:
-            #     await file.write(json.dumps(self.daily_shading))
-            #     logger.info("Shading file updated.")
-        self._current_hour = datetime.now(ZoneInfo(self.timezone)).hour
 
     async def _calculate_load_estimates(self) -> None:
         """Calculate the daily load averages once a day."""
