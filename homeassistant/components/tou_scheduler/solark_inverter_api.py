@@ -95,13 +95,13 @@ class InverterAPI:
         self.inverter_model: str | None = None
         self.inverter_serial_number: str | None = None
         self.inverter_status: Inverter = Inverter.UNKNOWN
-        self.tou_boost: int = 0
+        self.actual_grid_boost: int = 0
         # Here is the TOU boost info we will monitor and update
         self._grid_boost_starting_soc: int = DEFAULT_GRID_BOOST_STARTING_SOC
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
         self.grid_boost_end: str = DEFAULT_GRID_BOOST_END
         self.boost: str = DEFAULT_GRID_BOOST
-        self.manual_boost_soc: int = 0
+        self.manual_grid_boost: int = 0
 
         # Here is the battery info
         self.batt_wh_usable: int = 0  # Current battery charge in Wh
@@ -317,7 +317,7 @@ class InverterAPI:
 
         if data is not None:
             self._grid_boost_starting_soc = int(self._safe_get(data, "cap1"))
-            self.tou_boost = int(self._safe_get(data, "cap1"))
+            self.actual_grid_boost = int(self._safe_get(data, "cap1"))
             self.grid_boost_start = data.get("sellTime1", DEFAULT_GRID_BOOST_START)
             self.grid_boost_end = data.get("sellTime2", DEFAULT_GRID_BOOST_END)
             batt_capacity_ah = self._safe_get(data, "batteryCap")
@@ -656,7 +656,7 @@ class InverterAPI:
         body["sellTime1"] = str(self.grid_boost_start)
         # If we are doing a manual boost, set the SoC to the manual boost value
         if boost == "manual":
-            body["cap1"] = str(self.manual_boost_soc)
+            body["cap1"] = str(self.manual_grid_boost)
             body["time1on"] = "on"
         # If we are doing an automatic boost, set the SoC to the calculated value
         elif boost == "automated":

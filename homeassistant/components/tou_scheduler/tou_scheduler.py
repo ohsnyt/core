@@ -239,7 +239,9 @@ class TOUScheduler:
         #     user_input.get("grid_boost_starting_soc", DEFAULT_GRID_BOOST_STARTING_SOC)
         # )
         self._boost = str(user_input.get("boost_mode", "testing"))
-        self.inverter_api.manual_boost_soc = int(user_input.get("manual_boost_soc", 0))
+        self.inverter_api.manual_grid_boost = int(
+            user_input.get("manual_grid_boost", 0)
+        )
         self.solcast_api.percentile = int(
             user_input.get("percentile", DEFAULT_SOLCAST_PERCENTILE)
         )
@@ -625,7 +627,8 @@ class TOUScheduler:
             "inverter_status": str(self.inverter_api.inverter_status),
             "inverter_serial_number": self.inverter_api.inverter_serial_number
             or "unknown",
-            "tou1_boost": self.inverter_api.tou_boost,
+            "actual_grid_boost": self.inverter_api.actual_grid_boost,
+            "manual_grid_boost": self.inverter_api.manual_grid_boost,
             # Plant info
             "plant_id": self.inverter_api.plant_id or "unknown",
             "plant_created": str(self.inverter_api.plant_created.date())

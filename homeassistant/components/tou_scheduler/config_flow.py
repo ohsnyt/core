@@ -59,7 +59,7 @@ def get_options_schema(options: Mapping[str, Any]) -> vol.Schema:
     """Return the options schema."""
     boost = options.get("boost_mode", "automated")
     forecast_hours = options.get("forecast_hours", "23")
-    manual_boost_soc = options.get("manual_boost_soc", 50)
+    manual_grid_boost = options.get("manual_grid_boost", 50)
     history_days = options.get("history_days", "7")
     min_battery_soc = options.get("min_battery_soc", 15)
     percentile = options.get("percentile", 25)
@@ -70,7 +70,7 @@ def get_options_schema(options: Mapping[str, Any]) -> vol.Schema:
                 ["automated", "manual", "off", "testing"]
             ),
             # Manual Settings
-            vol.Required("manual_boost_soc", default=manual_boost_soc): vol.All(
+            vol.Required("manual_grid_boost", default=manual_grid_boost): vol.All(
                 vol.Coerce(int), vol.Range(min=5, max=100)
             ),
             # Automated Settings
@@ -173,7 +173,7 @@ class TOUSchedulerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "api_key": self.api_key,
                         "resource_id": self.resource_id,
                         "forecast_hours": solcast_hours,
-                        "manual_boost_soc": user_input["manual_boost_soc"],
+                        "manual_grid_boost": user_input["manual_grid_boost"],
                         "history_days": user_input["history_days"],
                         "min_battery_soc": user_input["min_battery_soc"],
                         "percentile": user_input["percentile"],
@@ -221,7 +221,7 @@ class TouSchedulerOptionFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(
                     title="",
                     data={
-                        "manual_boost_soc": user_input["manual_boost_soc"],
+                        "manual_grid_boost": user_input["manual_grid_boost"],
                         "history_days": user_input["history_days"],
                         "forecast_hours": solcast_hours,
                         "min_battery_soc": user_input["min_battery_soc"],

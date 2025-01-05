@@ -88,10 +88,19 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
     ),
-    "tou1_boost": OhSnytSensorEntityDescription(
-        key="tou1_boost",
+    "actual_grid_boost": OhSnytSensorEntityDescription(
+        key="actual_grid_boost",
         icon="mdi:battery",
         name="Actual Grid Boost SoC",
+        native_unit_of_measurement="%",
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+    ),
+    "manual_grid_boost": OhSnytSensorEntityDescription(
+        key="manual_grid_boost",
+        icon="mdi:battery",
+        name="Manual Grid Boost SoC",
         native_unit_of_measurement="%",
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
