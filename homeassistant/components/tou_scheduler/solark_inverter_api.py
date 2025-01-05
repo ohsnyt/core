@@ -85,6 +85,7 @@ class InverterAPI:
         self.plant_address: str | None = None
         self.plant_created: datetime | None = None
         self.plant_id: str | None = None
+        self.plant_status: Plant = Plant.UNKNOWN
         self.efficiency: float = DEFAULT_INVERTER_EFFICIENCY
         self._efficiency_update_month = (
             datetime.now(ZoneInfo(timezone)) - relativedelta(months=1)
@@ -94,6 +95,7 @@ class InverterAPI:
         self.inverter_model: str | None = None
         self.inverter_serial_number: str | None = None
         self.inverter_status: Inverter = Inverter.UNKNOWN
+        self.tou_boost: int = 0
         # Here is the TOU boost info we will monitor and update
         self._grid_boost_starting_soc: int = DEFAULT_GRID_BOOST_STARTING_SOC
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
@@ -315,6 +317,7 @@ class InverterAPI:
 
         if data is not None:
             self._grid_boost_starting_soc = int(self._safe_get(data, "cap1"))
+            self.tou_boost = int(self._safe_get(data, "cap1"))
             self.grid_boost_start = data.get("sellTime1", DEFAULT_GRID_BOOST_START)
             self.grid_boost_end = data.get("sellTime2", DEFAULT_GRID_BOOST_END)
             batt_capacity_ah = self._safe_get(data, "batteryCap")
@@ -512,7 +515,7 @@ class InverterAPI:
                                     self.plant_name = infos[0].get("name", None)
                                     self.plant_id = infos[0].get("id", None)
                                     self.plant_address = infos[0].get("address", None)
-                                    plant_status = Plant(
+                                    self.plant_status = Plant(
                                         infos[0].get("status", Plant.UNKNOWN)
                                     )
                                     created_date = infos[0].get("createAt", None)
@@ -520,7 +523,9 @@ class InverterAPI:
                                         self.plant_created = datetime.fromisoformat(
                                             created_date
                                         )
-                                    logger.debug("Plant status is: %s", plant_status)
+                                    logger.debug(
+                                        "Plant status is: %s", self.plant_status
+                                    )
 
                                 # With the plant info, go get the plant inverter serial number
                                 async with session.get(
@@ -720,4 +725,14 @@ class Cloud_Status(Enum):
     """Sol-Ark Data Cloud Status."""
 
     ONLINE = 0
+    UNKNOWN = 9
+
+
+class Plant_Status(Enum):
+    """Sol-Ark Plant Status."""
+
+    OFFLINE = 0
+    NORMAL = 1
+    WARNING = 2
+    FAULT = 3
     UNKNOWN = 9

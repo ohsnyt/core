@@ -85,6 +85,7 @@ class SolcastAPI:
         self.data_updated: datetime | None = None
         # forecast is a dictionary of kWh hourly estimates with the date/hour as the key and the value as a tuple of float and bool.
         self.forecast: dict[str, tuple[float, float]] = {}
+        self.day_forecast: float = 0.0
         self.energy_production_tomorrow = 0.0
         self.percentile = DEFAULT_SOLCAST_PERCENTILE
         self.update_hours = DEFAULT_SOLCAST_UPDATE_HOURS
@@ -137,6 +138,7 @@ class SolcastAPI:
 
         # Set the update date to now so that even if the api call fails, we don't try again until the next hour.
         self.data_updated = now
+
         # Try to get data from the API.
         raw_forecast: dict[str, str | float] = {}
         try:
@@ -217,7 +219,9 @@ class SolcastAPI:
                 0.0 if pd.isna(row["sun_ratio"]) else row["sun_ratio"],
             )
             for _, row in df.iterrows()
-        }  # All done
+        }
+        self.day_forecast = df["target_pv"].sum()
+        # All done
         self.status = SolcastStatus.API_NORMAL
         return True
 

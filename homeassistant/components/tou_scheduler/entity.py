@@ -1,15 +1,16 @@
 """Entity classes for TOU Scheduler entity.
 
 This module defines various entity classes used in the TOU (Time of Use) Scheduler integration.
-(These are specialized sensors.)
+(These are specialized sensors. They share some similarity with the sensors, notably the use of "im_a" to identify the entity type.)
 Each entity class represents a different aspect of the TOU Scheduler that is of special interest to the user:
     the scheduler,
     the calculated daily shading, and
     the calculated average daily load.
 """
 
-import ast
+import datetime
 import logging
+import re
 from typing import Any
 
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -27,6 +28,113 @@ else:
     logger.setLevel(logging.INFO)
 
 
+# Helper functions
+def printable_hour(hour: int) -> str:
+    """Return a printable hour string in 12-hour format with 'am' or 'pm' suffix.
+
+    Args:
+        hour: Hour in 24-hour format (0-23).
+
+    Returns:
+        Formatted string in 12-hour format with am/pm.
+
+    """
+    return f"{(hour % 12) or 12}" f"{' am' if hour < 12 else ' pm'}"
+
+
+def parse_percent_data(input_str: str) -> dict[str, str]:
+    """Convert a string representation of a dictionary to an actual dictionary.
+
+    Args:
+        input_str: String representation of a dictionary.
+
+    Returns:
+        A dictionary with integer keys and float values.
+
+    """
+    # Remove the curly braces
+    input_str = input_str.strip("{}")
+    # Split the string into key-value pairs
+    pairs = re.split(r",\s*(?![^{}]*\})", input_str)
+    result = {}
+    for pair in pairs:
+        # Split each pair into key and value
+        key, value = pair.split(":")
+        # Convert key and value to appropriate types and add to the dictionary
+        result[printable_hour(int(key.strip()))] = f"{100 * float(value.strip()):.0f}%"
+    return result
+
+
+def parse_wh_data(input_str: str) -> dict[str, str]:
+    """Convert a string representation of a dictionary to an actual dictionary.
+
+    Args:
+        input_str: String representation of a dictionary.
+
+    Returns:
+        A dictionary with integer keys and float values.
+
+    """
+    # Remove the curly braces
+    input_str = input_str.strip("{}")
+    # Split the string into key-value pairs
+    pairs = re.split(r",\s*(?![^{}]*\})", input_str)
+    result = {}
+    for pair in pairs:
+        # Split each pair into key and value
+        key, value = pair.split(":")
+        # Convert key and value to appropriate types and add to the dictionary
+        result[printable_hour(int(key.strip()))] = f"{float(value.strip()):,.0f} wH"
+    return result
+
+
+def count_data(input_str: str) -> int:
+    """Convert a string representation of a dictionary to an actual dictionary.
+
+    Args:
+        input_str: String representation of a dictionary.
+
+    Returns:
+        A dictionary with integer keys and float values.
+
+    """
+    # Remove the curly braces
+    input_str = input_str.strip("{}")
+    # Split the string into key-value pairs
+    pairs = re.split(r",\s*(?![^{}]*\})", input_str)
+    result = 0
+    for pair in pairs:
+        # Split each pair into key and value
+        key, value = pair.split(":")
+        # Convert key and value to appropriate types and add to the dictionary
+        if float(value.strip()) > 0.0:
+            result += 1
+    return result
+
+
+def sum_data(input_str: str) -> int:
+    """Convert a string representation of a dictionary to an actual dictionary.
+
+    Args:
+        input_str: String representation of a dictionary.
+
+    Returns:
+        A dictionary with integer keys and float values.
+
+    """
+    # Remove the curly braces
+    input_str = input_str.strip("{}")
+    # Split the string into key-value pairs
+    pairs = re.split(r",\s*(?![^{}]*\})", input_str)
+    result = 0.0
+    for pair in pairs:
+        # Split each pair into key and value
+        key, value = pair.split(":")
+        # Convert key and value to appropriate types and add to the dictionary
+        result += float(value.strip())
+    return int(round(result, 0))
+
+
 class TOUSchedulerEntity(CoordinatorEntity):
     """Class for TOU Scheduler entity."""
 
@@ -38,9 +146,10 @@ class TOUSchedulerEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         im_a: str = "scheduler"
-        plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
 
         super().__init__(coordinator)
+        self._coordinator = coordinator
+        plant_name: str = self._coordinator.data.get("plant_name", "My plant")
         self._key = im_a
         self._attr_unique_id = f"{entry_id}_{self._key}"
         self._attr_icon = "mdi:toggle-switch"
@@ -53,26 +162,29 @@ class TOUSchedulerEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, str]:
         """Return the extra state attributes."""
+        forecast = round(self.coordinator.data.get("day_forecast", 0.0), 1)
+        forecast_value = f"{forecast} kWh"
+        soc = self.coordinator.data.get("batt_soc", 0)
+        soc_value = f"{int(soc)}%" if soc else "Unknown"
         return {
-            "created": self.coordinator.data.get(
-                "plant_created", "Plant created time n/a"
-            ),
-            "cloud_name": self.coordinator.data.get("cloud_name", "Cloud name n/a"),
-            "cloud_token_refresh": self.coordinator.data.get(
-                "bearer_token_expires_on", "Unknown"
-            ),
             "plant_name": self.coordinator.data.get("plant_name", "Plant name n/a"),
-            "plant_status": self.coordinator.data.get(
-                "plant_status", "Plant status n/a"
-            ),
+            "battery_soc": soc_value,
+            "day_forecast": forecast_value,
             "inverter_model": self.coordinator.data.get(
                 "inverter_model", "Inverter model n/a"
             ),
+            "cloud_token_refresh": self.coordinator.data.get(
+                "bearer_token_expires_on", "Unknown"
+            ),
+            "cloud_status": self.coordinator.data.get("cloud_status", "Unknown"),
+            "plant_status": self.coordinator.data.get(
+                "plant_status", "Plant status n/a"
+            ),
+            "plant_created": self.coordinator.data.get(
+                "plant_created", "Plant created time n/a"
+            ),
             "inverter_status": self.coordinator.data.get(
                 "inverter_status", "Inverter status n/a"
-            ),
-            "battery_status": self.coordinator.data.get(
-                "battery_status", "Battery status n/a"
             ),
         }
 
@@ -108,14 +220,15 @@ class ShadingEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         im_a = "shading"
-        plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
 
         super().__init__(coordinator)
         self._coordinator = coordinator
+        plant_name: str = self._coordinator.data.get("plant_name", "My plant")
         self._key = im_a
         self._attr_unique_id = f"{entry_id}_{self._key}"
         self._attr_icon = "mdi:toggle-switch"
         self._attr_name = f"{plant_name} ToU {im_a}"
+        self._count: int = 0
         self._device_info = DeviceInfo(
             identifiers={(DOMAIN, entry_id)},
             name=self._attr_name,
@@ -139,25 +252,19 @@ class ShadingEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, str]:
         """Return the hourly shade values as dict[str,str]."""
-        hours = {
-            int(hour): value
-            for hour, value in ast.literal_eval(
-                self._coordinator.data.get("shading", "{}")
-            ).items()
-        }
-        attributes: dict[str, str] = {
-            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12:2} {'am' if hour < 12 else 'pm'}": f"{int(round(value, 2) * 100)}%"
-            for hour, value in hours.items()
-        }
-        if not attributes:
-            return {"No shading found": ""}
-        return attributes
+        hours_str = self._coordinator.data.get("shading", "{}")
+        hours: dict[str, str] = parse_percent_data(hours_str)
+        if not hours:
+            day = datetime.datetime.now().strftime("%a")
+            return {"No shading found": day}
+        return hours
 
     @property
     def state(self) -> str | int | float | None:
         """Return the count of hours with shading."""
-        shading_data = ast.literal_eval(self._coordinator.data.get("shading", "{}"))
-        count = sum(1 for value in shading_data.values() if value > 0)
+        hours_str = self._coordinator.data.get("shading", "{}")
+        # Count the number of hours with shading
+        count: int = count_data(hours_str)
         if count == 1:
             return "1 hour with shading"
         if count > 0:
@@ -179,10 +286,10 @@ class LoadEntity(CoordinatorEntity):
     ) -> None:
         """Initialize the sensor."""
         im_a = "load"
-        plant_name = f"{coordinator.data.get('plant_name', 'My plant')}"
 
         super().__init__(coordinator)
         self._coordinator = coordinator
+        plant_name: str = self._coordinator.data.get("plant_name", "My plant")
         self._key = im_a
         self._attr_unique_id = f"{entry_id}_{self._key}"
         self._attr_icon = "mdi:toggle-switch"
@@ -210,17 +317,18 @@ class LoadEntity(CoordinatorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, str]:
         """Return the hourly load values as dict[str,str]."""
-        hours = ast.literal_eval(self._coordinator.data.get("load", "{}"))
-        attributes = {
-            f"{'  ' if (hour % 12 or 12) < 10 else ''}{hour % 12 or 12} {'am' if hour < 12 else 'pm'}": f"{int(round(value,0)):,} Wh"
-            for hour, value in hours.items()
-        }
-        if not attributes:
-            return {"No load averages available": ""}
-        return attributes
+        hours_str: str = self._coordinator.data.get("load", "{}")
+        hours: dict[str, str] = parse_wh_data(hours_str)
+
+        if not hours:
+            day = datetime.datetime.now().strftime("%a")
+            return {"No load averages found": day}
+        return hours
 
     @property
     def state(self) -> str | int | float | None:
         """Return the state of the sensor."""
-        hours = ast.literal_eval(self._coordinator.data.get("load", "{}"))
-        return f"{round(sum(hours.values())/1000,1)} kWh"
+        hours_str: str = self._coordinator.data.get("load", "{}")
+        load = round(sum_data(hours_str) / 1000, 1)
+
+        return f"{load} kWh"

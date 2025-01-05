@@ -21,6 +21,7 @@ from .const import (
     DEFAULT_GRID_BOOST_MIDNIGHT_SOC,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
+    DEFAULT_SOLCAST_PERCENTILE,
     FORECAST_KEY,
     SHADE_KEY,
 )
@@ -116,6 +117,7 @@ class TOUScheduler:
     async def async_load_shading(self):
         """Load shading data from storage."""
         data = await self.store_shade.async_load()
+        data = {int(k): v for k, v in data.items()} if data else None
         if data is not None:
             self.daily_shading = data
 
@@ -232,17 +234,19 @@ class TOUScheduler:
         self, user_input: MappingProxyType[str, str | int]
     ) -> None:
         """Update the options and process the changes."""
-        self.min_battery_soc = int(user_input.get("min_battery_soc", 25))
-        self.grid_boost_starting_soc = int(
-            user_input.get("grid_boost_starting_soc", 25)
-        )
+        # self.min_battery_soc = int(user_input.get("min_battery_soc", DEFAULT_INVERTER_MIN_SOC))
+        # self.grid_boost_starting_soc = int(
+        #     user_input.get("grid_boost_starting_soc", DEFAULT_GRID_BOOST_STARTING_SOC)
+        # )
         self._boost = str(user_input.get("boost_mode", "testing"))
+        self.inverter_api.manual_boost_soc = int(user_input.get("manual_boost_soc", 0))
+        self.solcast_api.percentile = int(
+            user_input.get("percentile", DEFAULT_SOLCAST_PERCENTILE)
+        )
         self.solcast_api.update_hours = string_to_int_list(
             user_input.get("forecast_hours", "23")
         )
         self.days_of_load_history = int(user_input.get("history_days", 3))
-        self.grid_boost_starting_soc = int(user_input.get("min_battery_soc", 10))
-        self.inverter_api.manual_boost_soc = int(user_input.get("manual_boost_soc", 0))
 
         # Force an update of the sensors
         await self.update_sensors()
@@ -615,11 +619,13 @@ class TOUScheduler:
             "power_load": self.inverter_api.realtime_load_power,
             "power_pv": self.inverter_api.realtime_pv_power,
             "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(),
+            "day_pv_estimated": round(self.solcast_api.day_forecast / 1000, 2),
             # Inverter info
             "inverter_model": self.inverter_api.inverter_model or "unknown",
             "inverter_status": str(self.inverter_api.inverter_status),
             "inverter_serial_number": self.inverter_api.inverter_serial_number
             or "unknown",
+            "tou1_boost": self.inverter_api.tou_boost,
             # Plant info
             "plant_id": self.inverter_api.plant_id or "unknown",
             "plant_created": str(self.inverter_api.plant_created.date())
@@ -631,7 +637,10 @@ class TOUScheduler:
                 if self.inverter_api.bearer_token_expires_on
                 else "unknown"
             ),
+            "plant_status": str(self.inverter_api.plant_status),
+            "cloud_status": str(self.inverter_api.cloud_status),
             # Daily data
             "shading": str(self.daily_shading),
             "load": str(self.daily_load_averages),
+            "day_forecast": self.solcast_api.day_forecast,
         }
