@@ -22,6 +22,7 @@ from .const import (
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
     DEFAULT_INVERTER_EFFICIENCY,
+    DEFAULT_MANUAL_GRID_BOOST,
     TIMEOUT,
 )
 
@@ -101,7 +102,7 @@ class InverterAPI:
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
         self.grid_boost_end: str = DEFAULT_GRID_BOOST_END
         self.boost: str = DEFAULT_GRID_BOOST
-        self.manual_grid_boost: int = 0
+        self.manual_grid_boost: int = DEFAULT_MANUAL_GRID_BOOST
 
         # Here is the battery info
         self.batt_wh_usable: int = 0  # Current battery charge in Wh
@@ -640,16 +641,18 @@ class InverterAPI:
         # Report that the cloud status was good
         self.cloud_status = Cloud_Status.ONLINE
 
-    async def write_grid_boost_soc(self, boost: str, value: int) -> None:
+    async def write_grid_boost_soc(
+        self, boost: str, calculated_grid_boost: int
+    ) -> None:
         """Set the inverter setting for Time of Use block 1, State of Charge as per the supplied directive."""
 
         logger.debug("+++++++Pretending to set grid boost SoC setting+++++++")
         logger.debug(
             "Grid boost is %s with the state of charge set to: %s",
             boost,
-            value,
+            calculated_grid_boost,
         )
-        self._grid_boost_starting_soc = value
+        self._grid_boost_starting_soc = calculated_grid_boost
         # logger.debug("Writing grid boost SoC setting")
         # Set the inverter settings for Time of Use block 1, State of Charge
         body = {}
@@ -660,7 +663,7 @@ class InverterAPI:
             body["time1on"] = "on"
         # If we are doing an automatic boost, set the SoC to the calculated value
         elif boost == "automated":
-            body["cap1"] = str(value)
+            body["cap1"] = str(calculated_grid_boost)
             body["time1on"] = "on"
         # If we are turning off the boost, set the SoC to 0
         elif boost == "off":
@@ -673,7 +676,7 @@ class InverterAPI:
             logger.error("Invalid grid boost setting: %s", boost)
             return
 
-        # TESTING ONLY
+        # TESTING ONLY - DON'T WRITE THE SETTINGS
         # if self._urls.get("write_settings"):
         # response = await self._request(
         # "POST", self._urls["write_settings"], body=body

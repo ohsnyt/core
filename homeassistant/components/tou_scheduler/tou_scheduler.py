@@ -21,7 +21,9 @@ from .const import (
     DEFAULT_GRID_BOOST_MIDNIGHT_SOC,
     DEFAULT_GRID_BOOST_START,
     DEFAULT_GRID_BOOST_STARTING_SOC,
+    DEFAULT_MANUAL_GRID_BOOST,
     DEFAULT_SOLCAST_PERCENTILE,
+    DEFAULT_SOLCAST_UPDATE_HOURS,
     FORECAST_KEY,
     SHADE_KEY,
 )
@@ -106,7 +108,7 @@ class TOUScheduler:
 
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
-        self.grid_boost_starting_soc: int = DEFAULT_GRID_BOOST_STARTING_SOC
+        self.calculated_grid_boost: int = DEFAULT_GRID_BOOST_STARTING_SOC
         self.min_battery_soc: int = DEFAULT_GRID_BOOST_MIDNIGHT_SOC
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
         self._boost: str = "testing"
@@ -234,19 +236,16 @@ class TOUScheduler:
         self, user_input: MappingProxyType[str, str | int]
     ) -> None:
         """Update the options and process the changes."""
-        # self.min_battery_soc = int(user_input.get("min_battery_soc", DEFAULT_INVERTER_MIN_SOC))
-        # self.grid_boost_starting_soc = int(
-        #     user_input.get("grid_boost_starting_soc", DEFAULT_GRID_BOOST_STARTING_SOC)
-        # )
         self._boost = str(user_input.get("boost_mode", "testing"))
         self.inverter_api.manual_grid_boost = int(
-            user_input.get("manual_grid_boost", 0)
+            user_input.get("manual_grid_boost", DEFAULT_MANUAL_GRID_BOOST)
         )
         self.solcast_api.percentile = int(
             user_input.get("percentile", DEFAULT_SOLCAST_PERCENTILE)
         )
-        self.solcast_api.update_hours = string_to_int_list(
-            user_input.get("forecast_hours", "23")
+        update_hours = string_to_int_list(user_input.get("forecast_hours", ""))
+        self.solcast_api.update_hours = (
+            update_hours if update_hours else DEFAULT_SOLCAST_UPDATE_HOURS
         )
         self.days_of_load_history = int(user_input.get("history_days", 3))
 
@@ -465,14 +464,14 @@ class TOUScheduler:
         # Prevent required SoC from going above 100%
         required_soc = min(100, soc)
         # Save the new off-peak grid boost level
-        self.grid_boost_starting_soc = int(round(required_soc, 0))
+        self.calculated_grid_boost = int(round(required_soc, 0))
 
         # Test this new grid boost SoC to make sure we end up with the minimum SoC at midnight
         # Prepare the final results nicely for the user logs
         hyphen_format = "{:-^53}"
         logger.info(
             msg=hyphen_format.format(
-                f"Off-peak charging for {tomorrow.strftime("%A")} starting at {self.grid_boost_starting_soc}% SoC"
+                f"Off-peak charging for {tomorrow.strftime("%A")} starting at {self.calculated_grid_boost}% SoC"
             )
         )
         # Calculate additional SOC needed to reach midnight
@@ -503,7 +502,7 @@ class TOUScheduler:
 
         # Write the new grid boost SoC to the inverter
         await self.inverter_api.write_grid_boost_soc(
-            self._boost, self.grid_boost_starting_soc
+            self._boost, self.calculated_grid_boost
         )
 
     # Private hourly update method (called by update_sensors)
@@ -606,7 +605,7 @@ class TOUScheduler:
         return {
             "status": self._boost,
             "batt_time": self.batt_minutes_remaining / 60,
-            "grid_boost_soc": self.grid_boost_starting_soc,
+            "grid_boost_soc": self.calculated_grid_boost,
             "grid_boost_start": self.grid_boost_start,
             "grid_boost_on": self._boost,
             "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
