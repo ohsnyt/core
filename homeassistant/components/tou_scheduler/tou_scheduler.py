@@ -109,6 +109,7 @@ class TOUScheduler:
         # Here is the TOU boost info we will monitor and update
         self.batt_minutes_remaining: int = 0
         self.calculated_grid_boost: int = DEFAULT_GRID_BOOST_STARTING_SOC
+        self.calculated_grid_boost_day: str = ""
         self.min_battery_soc: int = DEFAULT_GRID_BOOST_MIDNIGHT_SOC
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
         self._boost: str = "testing"
@@ -377,7 +378,7 @@ class TOUScheduler:
         batt_wh_usable = float(self.inverter_api.batt_wh_usable or 0.0)
         minutes = 0
         boost_min_wh = self.inverter_api.batt_wh_per_percent * float(
-            DEFAULT_GRID_BOOST_STARTING_SOC
+            self.inverter_api.actual_grid_boost
         )
         # During the grid boost range we can't go below the grid boost SoC amount.
         boost_range = range(
@@ -438,6 +439,7 @@ class TOUScheduler:
         # Initialize variables
         required_soc = float(DEFAULT_GRID_BOOST_STARTING_SOC)
         tomorrow = datetime.now(ZoneInfo(self.timezone)).date() + timedelta(days=1)
+        self.calculated_grid_boost_day = tomorrow.strftime("%a")
         # First we assume the lowest point of the battery will be the warning level, but at the end we will also compare to the desired midnight SoC
         lowest_point = float(-self.inverter_api.batt_low_warning)
         running_soc = 0.0
@@ -606,6 +608,7 @@ class TOUScheduler:
             "status": self._boost,
             "batt_time": self.batt_minutes_remaining / 60,
             "grid_boost_soc": self.calculated_grid_boost,
+            "grid_boost_day": self.calculated_grid_boost_day,
             "grid_boost_start": self.grid_boost_start,
             "grid_boost_on": self._boost,
             "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
