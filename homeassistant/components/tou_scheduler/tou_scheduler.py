@@ -275,6 +275,10 @@ class TOUScheduler:
         We then reset the average PV power to the first value for this hour. and repeat the process for the next hour.
         """
 
+        # Only do this if we are in automated mode
+        if self._boost != "automated":
+            return
+
         # Get the pv data for the current hour, calculate the average PV power for the past hour, updating as needed
         pv_average = await self._get_pv_statistic_for_last_hour()
 
