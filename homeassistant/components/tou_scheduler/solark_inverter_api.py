@@ -260,7 +260,7 @@ class InverterAPI:
             return
 
         # Get totals for battery, PV, Grid, and Load from MySolark data cloud
-        logger.debug("Getting battery totals")
+        logger.debug("Getting battery totals for monthly efficiency calculation")
         data = await self._request("GET", self._urls["battery"], body={})
         if data is None:
             logger.error("Unable to update battery information")
@@ -622,6 +622,10 @@ class InverterAPI:
                     else datetime.now(ZoneInfo(self.timezone))
                 )
                 self.cloud_status = Cloud_Status.ONLINE
+                logger.debug("self._headers is now %s", self._headers)
+                logger.debug(
+                    "-------------------------------------------------------------------------------"
+                )
                 return True
 
         except aiohttp.ClientError as err:

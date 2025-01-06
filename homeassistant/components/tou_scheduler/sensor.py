@@ -221,8 +221,8 @@ class OhSnytSensor(CoordinatorEntity[TOUUpdateCoordinator], SensorEntity):
     @property
     def name(self) -> str | None:
         """Return the name of the sensor."""
-        if self.entity_description.name == "Calculated Grid Boost SoC":
-            day = self.coordinator.data.get("calculate_grid_boost_day")
+        if self.entity_description.key == "grid_boost_soc":
+            day = self.coordinator.data.get("grid_boost_day")
             if day:
                 return f"{self._attr_name or ''} ({day})"
         return self._attr_name
