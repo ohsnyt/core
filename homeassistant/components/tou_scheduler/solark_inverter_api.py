@@ -619,11 +619,11 @@ class InverterAPI:
                     self.cloud_status = Cloud_Status.UNKNOWN
                     return False
                 logger.debug("Reauthentication data is %s", response_data)
-                token = response_data.get("access_token", "")
+                token = data.get("access_token", "")
                 session.headers["Authorization"] = f"Bearer {token}"
                 self._headers["Authorization"] = f"Bearer {token}"
-                self._refresh_token = response_data.get("refresh_token", None)
-                expires = response_data.get("expires_in", None)
+                self._refresh_token = data.get("refresh_token", None)
+                expires = data.get("expires_in", None)
                 self.bearer_token_expires_on = (
                     datetime.now(ZoneInfo(self.timezone)) + timedelta(seconds=expires)
                     if expires
