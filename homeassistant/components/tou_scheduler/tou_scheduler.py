@@ -431,11 +431,12 @@ class TOUScheduler:
                 "At %s: Battery will not be exhausted in the next 5 days.",
                 starting_time,
             )
-        logger.info(
-            "At %s: Estimating %.1f hours of battery life.",
-            starting_time,
-            minutes / 60,
-        )
+        else:
+            logger.info(
+                "At %s: Estimating %.1f hours of battery life.",
+                starting_time,
+                minutes / 60,
+            )
 
     async def _calculate_tou_boost_soc(self) -> None:
         """Calculate tomorrow off-peak grid boost required SoC.
