@@ -210,6 +210,8 @@ class TouSchedulerOptionFlow(config_entries.OptionsFlow):
             # Check that the update hours are valid
             if solcast_hours := user_input.get("forecast_hours"):
                 try:
+                    if isinstance(solcast_hours, list):
+                        solcast_hours = int_list_to_string(solcast_hours)
                     sorted_hours = validate_update_hours(solcast_hours)
                     user_input["forecast_hours"] = string_to_int_list(sorted_hours)
                     solcast_hours = sorted_hours
@@ -218,6 +220,21 @@ class TouSchedulerOptionFlow(config_entries.OptionsFlow):
 
             # Save the user input and update the config entry options, converting the pseudo list to a list
             if not errors:
+                # Update the config entry options
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    options={
+                        "manual_grid_boost": user_input["manual_grid_boost"],
+                        "history_days": user_input["history_days"],
+                        "forecast_hours": solcast_hours,
+                        "min_battery_soc": user_input["min_battery_soc"],
+                        "percentile": user_input["percentile"],
+                        "boost_mode": user_input["boost"],
+                    },
+                )
+                # Get the coordinator and request a refresh
+                coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]
+                await coordinator.async_request_refresh()
                 return self.async_create_entry(
                     title="",
                     data={
