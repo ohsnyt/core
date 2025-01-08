@@ -10,7 +10,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 
 from .const import DOMAIN
-from .solark_inverter_api import InverterAPI  # Add this import
+from .solark_inverter_api import InverterAPI
 from .solcast_api import SolcastAPI, SolcastStatus
 
 _logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ def get_options_schema(options: Mapping[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required("boost", default=boost): vol.In(
-                ["automated", "manual", "off", "testing"]
+                ["automated", "manual", "off"]
             ),
             # Manual Settings
             vol.Required("manual_grid_boost", default=manual_grid_boost): vol.All(
@@ -201,7 +201,7 @@ class TouSchedulerOptionFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry) -> None:
         """Initialize options flow."""
-        # self.config_entry = config_entry
+        self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None) -> config_entries.ConfigFlowResult:
         """Redo the parameters step of the options flow."""

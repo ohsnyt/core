@@ -350,8 +350,9 @@ class InverterAPI:
         time_remaining = self.bearer_token_expires_on - datetime.now(
             ZoneInfo(self.timezone)
         )
-        if self._reauth_counter % 100 == 0 or time_remaining.total_seconds() < 300:
-            logger.debug(
+        if self._reauth_counter % 12 == 0 or time_remaining.total_seconds() < 300:
+            # TEMP Using logger.info instead of debug in semi-final version
+            logger.info(
                 "We need to reauthenticate in %s hours %s minutes",
                 time_remaining.total_seconds() // 3600 % 24,
                 time_remaining.total_seconds() // 60 % 60,
@@ -362,7 +363,8 @@ class InverterAPI:
         if self.bearer_token_expires_on and datetime.now(
             ZoneInfo(self.timezone)
         ) >= self.bearer_token_expires_on - timedelta(hours=1):
-            logger.debug("Reauthenticating to the Sol-Ark cloud")
+            # TEMP Using logger.info instead of debug in semi-final version
+            logger.info("Reauthenticating to the Sol-Ark cloud")
             if not await self.reauthenticate():
                 logger.error(
                     "Failed to reauthenticate to the Sol-Ark cloud. Doing backup authentication."
@@ -420,8 +422,14 @@ class InverterAPI:
         """Send a POST request to the Sol-Ark cloud and return the response."""
         async with aiohttp.ClientSession(headers=self._headers) as session:
             try:
+                if isinstance(body, str):
+                    json_body = body
+                elif isinstance(body, dict):
+                    json_body = json.dumps(body)
+                else:
+                    json_body = body
                 async with session.post(
-                    endpoint, json=json.dumps(body), timeout=TIMEOUT
+                    endpoint, json=json_body, timeout=TIMEOUT
                 ) as response:
                     return await response.json() if response else None
             except aiohttp.ClientError as err:
@@ -650,14 +658,7 @@ class InverterAPI:
     ) -> None:
         """Set the inverter setting for Time of Use block 1, State of Charge as per the supplied directive."""
 
-        logger.debug("+++++++Pretending to set grid boost SoC setting+++++++")
-        logger.debug(
-            "Grid boost is %s with the state of charge set to: %s",
-            boost,
-            calculated_grid_boost,
-        )
         self._grid_boost_starting_soc = calculated_grid_boost
-        # logger.debug("Writing grid boost SoC setting")
         # Set the inverter settings for Time of Use block 1, State of Charge
         body = {}
         body["sellTime1"] = str(self.grid_boost_start)
@@ -673,28 +674,25 @@ class InverterAPI:
         elif boost == "off":
             body["cap1"] = "0"
             body["time1on"] = "off"
-        elif boost == "testing":
-            logger.debug("We are just testing the grid boost settings")
-            return
         else:
             logger.error("Invalid grid boost setting: %s", boost)
             return
 
-        # TESTING ONLY - DON'T WRITE THE SETTINGS
-        # if self._urls.get("write_settings"):
-        # response = await self._request(
-        # "POST", self._urls["write_settings"], body=body
-        # )
-        # if response and response.get("msg", None) == "Success":
-        # logger.info(
-        # "Grid boost written: %s%% boost is scheduled to start just past midnight",
-        # self._grid_boost_starting_soc,
-        # )
-        # return
-        # logger.error(
-        # "Grid boost SoC setting NOT written. Response was: %s",
-        # response,
-        # )
+        if not self._urls.get("write_settings"):
+            logger.error("write_settings URL is not set")
+            return
+
+        response = await self._request("POST", self._urls["write_settings"], body=body)
+        if response and response.get("msg", None) == "Success":
+            logger.info(
+                "Grid boost written: %s%% boost is scheduled to start just past midnight",
+                self._grid_boost_starting_soc,
+            )
+            return
+        logger.error(
+            "Grid boost SoC setting NOT written. Response was: %s",
+            response,
+        )
 
 
 # Enum classes
