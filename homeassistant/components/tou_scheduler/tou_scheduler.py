@@ -397,7 +397,7 @@ class TOUScheduler:
             printable_hour(hour),
             batt_wh_usable,
         )
-        while batt_wh_usable > 0:
+        while batt_wh_usable > 0 and minutes < 5 * 24 * 60:
             # For each hour, calculate the impact of the solar generation and load.
             load = (
                 self.daily_load_averages.get(hour, 1000) / self.inverter_api.efficiency
@@ -426,6 +426,11 @@ class TOUScheduler:
                 day = day + timedelta(days=1)
 
         self.batt_minutes_remaining = minutes
+        if minutes >= 5 * 24 * 60:
+            logger.info(
+                "At %s: Battery will not be exhausted in the next 5 days.",
+                starting_time,
+            )
         logger.info(
             "At %s: Estimating %.1f hours of battery life.",
             starting_time,
