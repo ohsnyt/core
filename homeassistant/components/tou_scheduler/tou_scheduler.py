@@ -356,10 +356,7 @@ class TOUScheduler:
             return
 
         # Group by "hour" and get averages
-        hourly_averages = df.groupby("hour")["mean"].mean().to_dict()
-        self.daily_load_averages = {
-            hour: hourly_averages.get(hour, 1000.0) for hour in range(24)
-        }
+        self.daily_load_averages = df.groupby("hour")["mean"].mean().to_dict()
 
         self.load_estimates_updated = datetime.now(
             ZoneInfo(self.inverter_api.timezone)
