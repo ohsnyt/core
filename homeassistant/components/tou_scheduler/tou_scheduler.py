@@ -250,6 +250,9 @@ class TOUScheduler:
         )
         self.days_of_load_history = int(user_input.get("history_days", 3))
 
+        # Write any new grid boost changes to the inverter
+        await self.inverter_api.write_grid_boost_soc(self._boost)
+
         # Force an update of the sensors
         await self.update_sensors()
 
@@ -265,12 +268,12 @@ class TOUScheduler:
         """Calculate the shading each hour.
 
         We will store the shading for each hour of the day in a dictionary. We write this
-        to a file so we can load past shading if we restart Home Assistant.
+        to Home Assistant Storage so we can load past shading if we restart Home Assistant.
 
         Each update we record changes to actual PV power generated. We use this to compute an average PV power for the hour.
         At the beginning of a new hour, we compute the past hour average PV power and compare it to the estimated PV power and
         the estimated amount of sun. If the sun was full and the battery was charging we can adjust the shading and write
-        the adjusted shading info to a file, otherwise leave it alone.
+        the adjusted shading info to Home Assistant Storage, otherwise leave it alone.
 
         We then reset the average PV power to the first value for this hour. and repeat the process for the next hour.
         """
@@ -513,9 +516,8 @@ class TOUScheduler:
         logger.info(msg=hyphen_format.format("Done calculating grid boost SoC"))
 
         # Write the new grid boost SoC to the inverter
-        await self.inverter_api.write_grid_boost_soc(
-            self._boost, self.calculated_grid_boost
-        )
+        self.inverter_api.calculated_grid_boost = self.calculated_grid_boost
+        await self.inverter_api.write_grid_boost_soc(self._boost)
 
     # Private hourly update method (called by update_sensors)
     async def _hourly_updates(self) -> None:

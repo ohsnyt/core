@@ -103,6 +103,7 @@ class InverterAPI:
         self.grid_boost_end: str = DEFAULT_GRID_BOOST_END
         self.boost: str = DEFAULT_GRID_BOOST
         self.manual_grid_boost: int = DEFAULT_MANUAL_GRID_BOOST
+        self.calculated_grid_boost: int = DEFAULT_GRID_BOOST_STARTING_SOC
 
         # Here is the battery info
         self.batt_wh_usable: int = 0  # Current battery charge in Wh
@@ -422,15 +423,7 @@ class InverterAPI:
         """Send a POST request to the Sol-Ark cloud and return the response."""
         async with aiohttp.ClientSession(headers=self._headers) as session:
             try:
-                if isinstance(body, str):
-                    json_body = body
-                elif isinstance(body, dict):
-                    json_body = json.dumps(body)
-                else:
-                    json_body = body
-                async with session.post(
-                    endpoint, json=json_body, timeout=TIMEOUT
-                ) as response:
+                async with session.post(url=endpoint, json=body) as response:
                     return await response.json() if response else None
             except aiohttp.ClientError as err:
                 logger.error("Request error: %s", err)
@@ -653,27 +646,24 @@ class InverterAPI:
         # Report that the cloud status was good
         self.cloud_status = Cloud_Status.ONLINE
 
-    async def write_grid_boost_soc(
-        self, boost: str, calculated_grid_boost: int
-    ) -> None:
+    async def write_grid_boost_soc(self, boost: str) -> None:
         """Set the inverter setting for Time of Use block 1, State of Charge as per the supplied directive."""
 
-        self._grid_boost_starting_soc = calculated_grid_boost
         # Set the inverter settings for Time of Use block 1, State of Charge
-        body = {}
+        body: dict[str, str | bool] = {}
         body["sellTime1"] = str(self.grid_boost_start)
         # If we are doing a manual boost, set the SoC to the manual boost value
         if boost == "manual":
             body["cap1"] = str(self.manual_grid_boost)
-            body["time1on"] = "on"
+            body["time1on"] = True
         # If we are doing an automatic boost, set the SoC to the calculated value
         elif boost == "automated":
-            body["cap1"] = str(calculated_grid_boost)
-            body["time1on"] = "on"
+            body["cap1"] = str(self.calculated_grid_boost)
+            body["time1on"] = True
         # If we are turning off the boost, set the SoC to 0
         elif boost == "off":
             body["cap1"] = "0"
-            body["time1on"] = "off"
+            body["time1on"] = False
         else:
             logger.error("Invalid grid boost setting: %s", boost)
             return
