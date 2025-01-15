@@ -67,7 +67,7 @@ def get_options_schema(options: Mapping[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required("boost", default=boost): vol.In(
-                ["automated", "manual", "off"]
+                ["automated", "manual", "off", "testing"]
             ),
             # Manual Settings
             vol.Required("manual_grid_boost", default=manual_grid_boost): vol.All(

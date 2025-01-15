@@ -94,5 +94,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except KeyError as e:
         _LOGGER.error("Error unloading TOU Scheduler entry: %s", e)
         return False
-
     return unload_ok

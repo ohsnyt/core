@@ -112,7 +112,7 @@ class TOUScheduler:
         self.calculated_grid_boost_day: str = ""
         self.min_battery_soc: int = DEFAULT_GRID_BOOST_MIDNIGHT_SOC
         self.grid_boost_start: str = DEFAULT_GRID_BOOST_START
-        self._boost: str = "automated"
+        self._boost: str = "testing"
         self.days_of_load_history: int = DEFAULT_GRID_BOOST_HISTORY
         self._update_tou_boost: bool = False
 
@@ -237,7 +237,7 @@ class TOUScheduler:
         self, user_input: MappingProxyType[str, str | int]
     ) -> None:
         """Update the options and process the changes."""
-        self._boost = str(user_input.get("boost_mode", "automated"))
+        self._boost = str(user_input.get("boost_mode", "testing"))
         self.inverter_api.manual_grid_boost = int(
             user_input.get("manual_grid_boost", DEFAULT_MANUAL_GRID_BOOST)
         )
@@ -278,8 +278,8 @@ class TOUScheduler:
         We then reset the average PV power to the first value for this hour. and repeat the process for the next hour.
         """
 
-        # Only do this if we are in automated mode
-        if self._boost != "automated":
+        # Only do this if we are in automated mode or testing mode
+        if self._boost != "automated" or self._boost != "testing":
             return
 
         # Get the pv data for the current hour, calculate the average PV power for the past hour, updating as needed

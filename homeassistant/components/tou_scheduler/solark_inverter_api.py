@@ -652,6 +652,10 @@ class InverterAPI:
         # Set the inverter settings for Time of Use block 1, State of Charge
         body: dict[str, str | bool] = {}
         body["sellTime1"] = str(self.grid_boost_start)
+        # If we are doing testing, just return
+        if boost == "testing":
+            logger.info("Testing grid boost, no changes made.")
+            return
         # If we are doing a manual boost, set the SoC to the manual boost value
         if boost == "manual":
             body["cap1"] = str(self.manual_grid_boost)
