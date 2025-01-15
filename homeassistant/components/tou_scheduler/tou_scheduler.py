@@ -631,7 +631,7 @@ class TOUScheduler:
             "power_grid": self.inverter_api.realtime_grid_power,
             "power_load": self.inverter_api.realtime_load_power,
             "power_pv": self.inverter_api.realtime_pv_power,
-            "power_pv_estimated": self.solcast_api.get_current_hour_pv_estimate(),
+            "power_pv_estimated": self.solcast_api.get_previous_hour_pv_estimate(),
             "day_pv_estimated": round(self.solcast_api.day_forecast / 1000, 2),
             # Inverter info
             "inverter_model": self.inverter_api.inverter_model or "unknown",
