@@ -421,7 +421,7 @@ class TOUScheduler:
             if batt_wh_usable > 0:
                 minutes += 60
             else:
-                minutes = minutes + int(batt_wh_usable / (pv - load)) * 60
+                minutes -= int((batt_wh_usable / (pv - load)) * 60)
             # Move to next hour
             hour = (hour + 1) % 24
             if hour == 0:
