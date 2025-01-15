@@ -614,24 +614,18 @@ class TOUScheduler:
         """
         # Get the current hour
         hour = datetime.now(ZoneInfo(self.inverter_api.timezone)).hour
-
+        exhausted = (
+            datetime.now(ZoneInfo(self.inverter_api.timezone))
+            + timedelta(minutes=self.batt_minutes_remaining)
+        ).strftime("%a %-I %p")
         return {
-            "status": self._boost,
-            "batt_time": self.batt_minutes_remaining / 60,
-            "grid_boost_soc": self.calculated_grid_boost,
-            "grid_boost_day": self.calculated_grid_boost_day,
-            "grid_boost_start": self.grid_boost_start,
-            "grid_boost_on": self._boost,
-            "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
-            # Inverter data
-            "data_updated": self.inverter_api.data_updated
-            if self.inverter_api.data_updated
-            else "unknown",
+            # Battery data
             "batt_wh_usable": self.inverter_api.batt_wh_usable or "0",
             "batt_soc": self.inverter_api.realtime_battery_soc,
             "power_battery": self.inverter_api.realtime_battery_power,
-            "power_grid": self.inverter_api.realtime_grid_power,
-            "power_load": self.inverter_api.realtime_load_power,
+            "batt_time": self.batt_minutes_remaining / 60,
+            "batt_exhausted": exhausted,
+            # PV data
             "power_pv": self.inverter_api.realtime_pv_power,
             "power_pv_estimated": self.solcast_api.get_previous_hour_pv_estimate(),
             "day_pv_estimated": round(self.solcast_api.day_forecast / 1000, 2),
@@ -640,8 +634,20 @@ class TOUScheduler:
             "inverter_status": str(self.inverter_api.inverter_status),
             "inverter_serial_number": self.inverter_api.inverter_serial_number
             or "unknown",
+            "data_updated": self.inverter_api.data_updated
+            if self.inverter_api.data_updated
+            else "unknown",
+            "power_grid": self.inverter_api.realtime_grid_power,
+            "power_load": self.inverter_api.realtime_load_power,
+            "load_estimate": self.load_estimates.get(str(hour), {}).get(hour, 1000),
+            # Boost data
             "actual_grid_boost": self.inverter_api.actual_grid_boost,
             "manual_grid_boost": self.inverter_api.manual_grid_boost,
+            "status": self._boost,
+            "grid_boost_soc": self.calculated_grid_boost,
+            "grid_boost_day": self.calculated_grid_boost_day,
+            "grid_boost_start": self.grid_boost_start,
+            "grid_boost_on": self._boost,
             # Plant info
             "plant_id": self.inverter_api.plant_id or "unknown",
             "plant_created": str(self.inverter_api.plant_created.date())

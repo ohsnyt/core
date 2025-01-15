@@ -125,6 +125,11 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
     ),
+    "batt_exhausted": OhSnytSensorEntityDescription(
+        key="batt_exhausted",
+        icon="mdi:timer-outline",
+        name="Battery exhausted at",
+    ),
 }
 
 
