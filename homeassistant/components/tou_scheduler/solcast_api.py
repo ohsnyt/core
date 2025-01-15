@@ -97,18 +97,26 @@ class SolcastAPI:
         # Return the current hour estimate
         return round(1000 * self.forecast.get(current_hour, (0.0, 0.0))[0], 0)
 
-    def get_last_hour_sun_estimate(self) -> float:
+    def get_previous_hour_pv_estimate(self) -> float:
+        """Get the estimate for the current hour PV."""
+        previous_hour = (
+            datetime.now(ZoneInfo(self.timezone)) - timedelta(hours=1)
+        ).strftime("%Y-%m-%d-%H")
+        # Return the current hour estimate
+        return round(1000 * self.forecast.get(previous_hour, (0.0, 0.0))[0], 0)
+
+    def get_previous_hour_sun_estimate(self) -> float:
         """Get the sun status for the previous hour."""
-        current_hour = (
+        previous_hour = (
             datetime.now(ZoneInfo(self.timezone)) - timedelta(hours=1)
         ).strftime("%Y-%m-%d-%H")
         # Return the current hour estimate
         logger.debug(
             "Sun ratio for %s is %s",
-            printable_hour(int(current_hour[-2:])),
-            self.forecast.get(current_hour, (0.0, 0.0))[1],
+            printable_hour(int(previous_hour[-2:])),
+            self.forecast.get(previous_hour, (0.0, 0.0))[1],
         )
-        return self.forecast.get(current_hour, (0.0, 0.0))[1]
+        return self.forecast.get(previous_hour, (0.0, 0.0))[1]
 
     async def refresh_data(self) -> bool:
         """Refresh Solcast data.

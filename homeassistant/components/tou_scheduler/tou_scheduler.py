@@ -288,25 +288,25 @@ class TOUScheduler:
         logger.debug(
             "Average PV power for the past hour: %s, last sun estimate is: %.2f",
             pv_average,
-            self.solcast_api.get_last_hour_sun_estimate(),
+            self.solcast_api.get_previous_hour_sun_estimate(),
         )
         # Update shading if we had a positive average PV power, battery soc is low enough to allow charging, and the sun was full
         last_hour = (datetime.now(ZoneInfo(self.timezone)).hour - 1) % 24
         if (
             pv_average > 0
-            and self.solcast_api.get_current_hour_pv_estimate() > 0
+            and self.solcast_api.get_previous_hour_pv_estimate() > 0
             and self.inverter_api.realtime_battery_soc < 96
-            and self.solcast_api.get_last_hour_sun_estimate() > 0.95
+            and self.solcast_api.get_previous_hour_sun_estimate() > 0.95
         ):
             shading = 1 - min(
-                pv_average / self.solcast_api.get_current_hour_pv_estimate(), 1
+                pv_average / self.solcast_api.get_previous_hour_pv_estimate(), 1
             )
             self.daily_shading[last_hour] = shading
             logger.info(
                 "Shading for %s changed to %s. Last hour sun estimate is %.2f",
                 last_hour,
                 shading,
-                self.solcast_api.get_last_hour_sun_estimate(),
+                self.solcast_api.get_previous_hour_sun_estimate(),
             )
 
             # Write the shading to the hass storage

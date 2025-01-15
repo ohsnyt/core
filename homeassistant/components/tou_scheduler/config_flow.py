@@ -57,7 +57,7 @@ def validate_update_hours(value):
 
 def get_options_schema(options: Mapping[str, Any]) -> vol.Schema:
     """Return the options schema."""
-    boost = options.get("boost_mode", "automated")
+    boost = options.get("boost_mode", "testing")
     forecast_hours = options.get("forecast_hours", "23")
     manual_grid_boost = options.get("manual_grid_boost", 50)
     history_days = options.get("history_days", "7")
