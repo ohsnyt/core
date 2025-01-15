@@ -381,14 +381,15 @@ class TOUScheduler:
         )
         batt_wh_usable = float(self.inverter_api.batt_wh_usable or 0.0)
         minutes = 0
-        boost_min_wh = self.inverter_api.batt_wh_per_percent * float(
-            self.inverter_api.actual_grid_boost
-        )
-        # During the grid boost range we can't go below the grid boost SoC amount.
-        boost_range = range(
-            int(self.grid_boost_start.split(":", maxsplit=1)[0]),
-            int(self.inverter_api.grid_boost_end.split(":", maxsplit=1)[0]),
-        )
+        # REMOVED GRID BOOST RANGE CHECKING SO WE CAN SEE THE BATTERY LIFE WITHOUT ANY GRID HELP
+        # boost_min_wh: float = self.inverter_api.batt_wh_per_percent * float(
+        #     self.inverter_api.actual_grid_boost
+        # )
+        # # During the grid boost range we can't go below the grid boost SoC amount.
+        # boost_range = range(
+        #     int(self.grid_boost_start.split(":", maxsplit=1)[0]),
+        #     int(self.inverter_api.grid_boost_end.split(":", maxsplit=1)[0]),
+        # )
 
         # Log for debugging
         logger.debug("------- Calculating remaining battery time -------")
@@ -408,8 +409,9 @@ class TOUScheduler:
                 * (1 - self.daily_shading.get(hour, 0.0))
             )
             batt_wh_usable = batt_wh_usable - load + pv
-            if hour in boost_range and batt_wh_usable < boost_min_wh:
-                batt_wh_usable = boost_min_wh
+            # REMOVING GRID BOOST RANGE CHECK, AS NOTED ABOVE
+            # if hour in boost_range and batt_wh_usable < boost_min_wh:
+            #     batt_wh_usable = boost_min_wh
             logger.debug(
                 "At %s battery energy is %6s wH.",
                 printable_hour((hour + 1) % 24),
