@@ -332,3 +332,55 @@ class LoadEntity(CoordinatorEntity):
         load = round(sum_data(hours_str) / 1000, 1)
 
         return f"{load} kWh"
+
+
+class BatteryLifeEntity(CoordinatorEntity):
+    """Representation of the average daily load.
+
+    This sensor is used to display the average daily load for each hour of the day if available.
+    """
+
+    def __init__(
+        self,
+        entry_id: str,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        # parent: str,
+    ) -> None:
+        """Initialize the sensor."""
+        im_a = "battery_life"
+
+        super().__init__(coordinator)
+        self._coordinator = coordinator
+        # plant_name: str = self._coordinator.data.get("plant_name", "My plant")
+        self._key = im_a
+        self._attr_unique_id = f"{entry_id}_{self._key}"
+        self._attr_icon = "mdi:clock-alert"
+        self._attr_name = "Battery empty at"
+        self._device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry_id)},
+            name=self._attr_name,
+        )
+
+    @property
+    def name(self) -> str | None:
+        """Return the name of the sensor."""
+        return self._attr_name
+
+    @property
+    def unique_id(self) -> str | None:
+        """Return a unique ID."""
+        return self._attr_unique_id
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the device info."""
+        return self._device_info
+
+    @property
+    def state(self) -> str | int | float | None:
+        """Return the state of the sensor."""
+        eol: str = self._coordinator.data.get(
+            "batt_exhausted", datetime.datetime.now().timestamp()
+        ).strftime("%a %-I:%M %p")
+
+        return eol

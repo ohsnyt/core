@@ -18,7 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEBUGGING, DOMAIN
 from .coordinator import TOUUpdateCoordinator
-from .entity import LoadEntity, ShadingEntity, TOUSchedulerEntity
+from .entity import BatteryLifeEntity, LoadEntity, ShadingEntity, TOUSchedulerEntity
 
 logger = logging.getLogger(__name__)
 if DEBUGGING:
@@ -125,11 +125,6 @@ TOU_SENSOR_ENTITIES: dict[str, OhSnytSensorEntityDescription] = {
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
     ),
-    "batt_exhausted": OhSnytSensorEntityDescription(
-        key="batt_exhausted",
-        icon="mdi:timer-outline",
-        name="Battery exhausted at",
-    ),
 }
 
 
@@ -161,7 +156,7 @@ async def async_setup_entry(
     parent = f"{unique_prefix}_scheduler"
 
     # Add special entity sensors: Scheduler, Battery, Cloud, Plant, Inverter, Shading and Load (from entity.py)
-    entity_list = [TOUSchedulerEntity, ShadingEntity, LoadEntity]
+    entity_list = [TOUSchedulerEntity, ShadingEntity, LoadEntity, BatteryLifeEntity]
     entities = [
         entity(entry_id=unique_prefix, coordinator=coordinator)
         for entity in entity_list

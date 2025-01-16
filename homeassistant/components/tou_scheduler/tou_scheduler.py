@@ -588,7 +588,7 @@ class TOUScheduler:
         # Listen for changes to the options and update the cloud object
         self.config_entry.add_update_listener(self._options_callback)
 
-    async def update_sensors(self) -> dict[str, int | float | str]:
+    async def update_sensors(self) -> dict[str, int | float | str | datetime]:
         """Update the sensors every 5 minutes with the latest data."""
         # Set status to indicate we are working - May not be needed
         self.status = "Working"
@@ -602,7 +602,7 @@ class TOUScheduler:
         # Return the updated sensor data
         return self.to_dict()
 
-    def to_dict(self) -> dict[str, float | str]:
+    def to_dict(self) -> dict[str, float | str | datetime]:
         """Return this sensor data as a dictionary.
 
         This method provides expected battery life statistics and the grid boost value for the upcoming day.
@@ -614,10 +614,9 @@ class TOUScheduler:
         """
         # Get the current hour
         hour = datetime.now(ZoneInfo(self.inverter_api.timezone)).hour
-        exhausted = (
-            datetime.now(ZoneInfo(self.inverter_api.timezone))
-            + timedelta(minutes=self.batt_minutes_remaining)
-        ).strftime("%a %-I %p")
+        exhausted = datetime.now(tz=ZoneInfo(self.inverter_api.timezone)) + timedelta(
+            minutes=self.batt_minutes_remaining
+        )
         return {
             # Battery data
             "batt_wh_usable": self.inverter_api.batt_wh_usable or "0",

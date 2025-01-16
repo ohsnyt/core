@@ -100,8 +100,13 @@ class SolcastAPI:
     def get_previous_hour_pv_estimate(self) -> float:
         """Get the estimate for the current hour PV."""
         previous_hour = (
-            datetime.now(ZoneInfo(self.timezone)) - timedelta(hours=1)
+            datetime.now(ZoneInfo(self.timezone)) + timedelta(hours=1)
         ).strftime("%Y-%m-%d-%H")
+        logger.debug(
+            "Looking at %s. Got forecast of %s",
+            previous_hour,
+            round(1000 * self.forecast.get(previous_hour, (0.0, 0.0))[0], 0),
+        )
         # Return the current hour estimate
         return round(1000 * self.forecast.get(previous_hour, (0.0, 0.0))[0], 0)
 
